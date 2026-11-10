@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+
+
+<title>3. Explorar columnas con analizar()</title>
+
+<script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
+// be compatible with the behavior of Pandoc < 2.8).
+document.addEventListener('DOMContentLoaded', function(e) {
+  var hs = document.querySelectorAll("div.section[class*='level'] > :first-child");
+  var i, h, a;
+  for (i = 0; i < hs.length; i++) {
+    h = hs[i];
+    if (!/^h[1-6]$/i.test(h.tagName)) continue;  // it should be a header h1-h6
+    a = h.attributes;
+    while (a.length > 0) h.removeAttribute(a[0].name);
+  }
+});
+</script>
+<script>// Hide empty <a> tag within highlighted CodeBlock for screen reader accessibility (see https://github.com/jgm/pandoc/issues/6352#issuecomment-626106786) -->
+// v0.0.1
+// Written by JooYoung Seo (jooyoung@psu.edu) and Atsushi Yasumoto on June 1st, 2020.
+
+document.addEventListener('DOMContentLoaded', function() {
+  const codeList = document.getElementsByClassName("sourceCode");
+  for (var i = 0; i < codeList.length; i++) {
+    var linkList = codeList[i].getElementsByTagName('a');
+    for (var j = 0; j < linkList.length; j++) {
+      if (linkList[j].innerHTML === "") {
+        linkList[j].setAttribute('aria-hidden', 'true');
+      }
+    }
+  }
+});
+</script>
+
+<style type="text/css">
+  code{white-space: pre-wrap;}
+  span.smallcaps{font-variant: small-caps;}
+  span.underline{text-decoration: underline;}
+  div.column{display: inline-block; vertical-align: top; width: 50%;}
+  div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+  ul.task-list{list-style: none;}
+    </style>
+
+
+
+<style type="text/css">
+  code {
+    white-space: pre;
+  }
+  .sourceCode {
+    overflow: visible;
+  }
+</style>
+<style type="text/css" data-origin="pandoc">
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+    color: #aaaaaa;
+  }
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code span.at { color: #7d9029; } /* Attribute */
+code span.bn { color: #40a070; } /* BaseN */
+code span.bu { } /* BuiltIn */
+code span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code span.ch { color: #4070a0; } /* Char */
+code span.cn { color: #880000; } /* Constant */
+code span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code span.dt { color: #902000; } /* DataType */
+code span.dv { color: #40a070; } /* DecVal */
+code span.er { color: #ff0000; font-weight: bold; } /* Error */
+code span.ex { } /* Extension */
+code span.fl { color: #40a070; } /* Float */
+code span.fu { color: #06287e; } /* Function */
+code span.im { } /* Import */
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+code span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code span.op { color: #666666; } /* Operator */
+code span.ot { color: #007020; } /* Other */
+code span.pp { color: #bc7a00; } /* Preprocessor */
+code span.sc { color: #4070a0; } /* SpecialChar */
+code span.ss { color: #bb6688; } /* SpecialString */
+code span.st { color: #4070a0; } /* String */
+code span.va { color: #19177c; } /* Variable */
+code span.vs { color: #4070a0; } /* VerbatimString */
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+
+</style>
+<script>
+// apply pandoc div.sourceCode style to pre.sourceCode instead
+(function() {
+  var sheets = document.styleSheets;
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].ownerNode.dataset["origin"] !== "pandoc") continue;
+    try { var rules = sheets[i].cssRules; } catch (e) { continue; }
+    var j = 0;
+    while (j < rules.length) {
+      var rule = rules[j];
+      // check if there is a div.sourceCode rule
+      if (rule.type !== rule.STYLE_RULE || rule.selectorText !== "div.sourceCode") {
+        j++;
+        continue;
+      }
+      var style = rule.style.cssText;
+      // check if color or background-color is set
+      if (rule.style.color === '' && rule.style.backgroundColor === '') {
+        j++;
+        continue;
+      }
+      // replace div.sourceCode by a pre.sourceCode rule
+      sheets[i].deleteRule(j);
+      sheets[i].insertRule('pre.sourceCode{' + style + '}', j);
+    }
+  }
+})();
+</script>
+
+
+
+
+<style type="text/css">body {
+background-color: #fff;
+margin: 1em auto;
+max-width: 700px;
+overflow: visible;
+padding-left: 2em;
+padding-right: 2em;
+font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+font-size: 14px;
+line-height: 1.35;
+}
+#TOC {
+clear: both;
+margin: 0 0 10px 10px;
+padding: 4px;
+width: 400px;
+border: 1px solid #CCCCCC;
+border-radius: 5px;
+background-color: #f6f6f6;
+font-size: 13px;
+line-height: 1.3;
+}
+#TOC .toctitle {
+font-weight: bold;
+font-size: 15px;
+margin-left: 5px;
+}
+#TOC ul {
+padding-left: 40px;
+margin-left: -1.5em;
+margin-top: 5px;
+margin-bottom: 5px;
+}
+#TOC ul ul {
+margin-left: -2em;
+}
+#TOC li {
+line-height: 16px;
+}
+table {
+margin: 1em auto;
+border-width: 1px;
+border-color: #DDDDDD;
+border-style: outset;
+border-collapse: collapse;
+}
+table th {
+border-width: 2px;
+padding: 5px;
+border-style: inset;
+}
+table td {
+border-width: 1px;
+border-style: inset;
+line-height: 18px;
+padding: 5px 5px;
+}
+table, table th, table td {
+border-left-style: none;
+border-right-style: none;
+}
+table thead, table tr.even {
+background-color: #f7f7f7;
+}
+p {
+margin: 0.5em 0;
+}
+blockquote {
+background-color: #f6f6f6;
+padding: 0.25em 0.75em;
+}
+hr {
+border-style: solid;
+border: none;
+border-top: 1px solid #777;
+margin: 28px 0;
+}
+dl {
+margin-left: 0;
+}
+dl dd {
+margin-bottom: 13px;
+margin-left: 13px;
+}
+dl dt {
+font-weight: bold;
+}
+ul {
+margin-top: 0;
+}
+ul li {
+list-style: circle outside;
+}
+ul ul {
+margin-bottom: 0;
+}
+pre, code {
+background-color: #f7f7f7;
+border-radius: 3px;
+color: #333;
+white-space: pre-wrap; 
+}
+pre {
+border-radius: 3px;
+margin: 5px 0px 10px 0px;
+padding: 10px;
+}
+pre:not([class]) {
+background-color: #f7f7f7;
+}
+code {
+font-family: Consolas, Monaco, 'Courier New', monospace;
+font-size: 85%;
+}
+p > code, li > code {
+padding: 2px 0px;
+}
+div.figure {
+text-align: center;
+}
+img {
+background-color: #FFFFFF;
+padding: 2px;
+border: 1px solid #DDDDDD;
+border-radius: 3px;
+border: 1px solid #CCCCCC;
+margin: 0 5px;
+}
+h1 {
+margin-top: 0;
+font-size: 35px;
+line-height: 40px;
+}
+h2 {
+border-bottom: 4px solid #f7f7f7;
+padding-top: 10px;
+padding-bottom: 2px;
+font-size: 145%;
+}
+h3 {
+border-bottom: 2px solid #f7f7f7;
+padding-top: 10px;
+font-size: 120%;
+}
+h4 {
+border-bottom: 1px solid #f7f7f7;
+margin-left: 8px;
+font-size: 105%;
+}
+h5, h6 {
+border-bottom: 1px solid #ccc;
+font-size: 105%;
+}
+a {
+color: #0033dd;
+text-decoration: none;
+}
+a:hover {
+color: #6666ff; }
+a:visited {
+color: #800080; }
+a:visited:hover {
+color: #BB00BB; }
+a[href^="http:"] {
+text-decoration: underline; }
+a[href^="https:"] {
+text-decoration: underline; }
+
+code > span.kw { color: #555; font-weight: bold; } 
+code > span.dt { color: #902000; } 
+code > span.dv { color: #40a070; } 
+code > span.bn { color: #d14; } 
+code > span.fl { color: #d14; } 
+code > span.ch { color: #d14; } 
+code > span.st { color: #d14; } 
+code > span.co { color: #888888; font-style: italic; } 
+code > span.ot { color: #007020; } 
+code > span.al { color: #ff0000; font-weight: bold; } 
+code > span.fu { color: #900; font-weight: bold; } 
+code > span.er { color: #a61717; background-color: #e3d2d2; } 
+</style>
+
+
+
+
+</head>
+
+<body>
+
+
+
+
+<h1 class="title toc-ignore">3. Explorar columnas con <code>analizar()</code></h1>
+
+
+
+<p>El perfil dice qué está mal en una tabla. Antes de decidir qué le exigimos, también queremos saber qué hay en cada columna: qué forma tienen los valores, qué tipo esconden, cómo se reparten, qué columnas se mueven juntas y qué período cubren las fechas. ¿Cómo lo vemos todo de una vez, y cómo lo compartimos?</p>
+<blockquote>
+<p><strong>En esta guía:</strong></p>
+<ul>
+<li>qué arma <code>analizar()</code> en una sola llamada y dónde queda cada pieza;</li>
+<li>cómo se leen patrones, tipos, fechas, escalas, distribuciones, asociaciones y tiempo;</li>
+<li>qué mide <code>analizar()</code> por su cuenta y cómo se apaga;</li>
+<li>cuándo conviene <code>perfilar()</code> y cuándo <code>analizar()</code>;</li>
+<li>cómo guardamos el análisis y producimos un informe HTML.</li>
+</ul>
+</blockquote>
+<p>Seguimos con <code>datos_operativos</code>, la entrega de 13 registros con defectos sembrados que presenta <a href="lupa.html">1. Empezar en diez minutos</a>.</p>
+<div id="una-llamada-todos-los-componentes" class="section level2">
+<h2>Una llamada, todos los componentes</h2>
+<p>Fijamos <code>fecha</code> para que el ejemplo dé siempre el mismo resultado.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true"></a><span class="kw">library</span>(lupa)</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true"></a></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true"></a>analisis &lt;-<span class="st"> </span><span class="kw">analizar</span>(</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true"></a>  datos_operativos,</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true"></a>  <span class="dt">nombre =</span> <span class="st">&quot;entrega de ejemplo&quot;</span>,</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true"></a>  <span class="dt">fecha =</span> <span class="kw">as.POSIXct</span>(<span class="st">&quot;2026-01-15&quot;</span>, <span class="dt">tz =</span> <span class="st">&quot;UTC&quot;</span>)</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true"></a>)</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true"></a><span class="kw">names</span>(analisis)</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true"></a><span class="co">#&gt;  [1] &quot;perfil&quot;            &quot;distribuciones&quot;    &quot;asociaciones&quot;      &quot;temporal&quot;         </span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true"></a><span class="co">#&gt;  [5] &quot;variables&quot;         &quot;propuesta_modelo&quot;  &quot;decision_medicion&quot; &quot;tablero&quot;          </span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true"></a><span class="co">#&gt;  [9] &quot;medicion&quot;          &quot;detalle_medicion&quot;  &quot;evaluacion&quot;        &quot;plan_limpieza&quot;    </span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true"></a><span class="co">#&gt; [13] &quot;cobertura&quot;         &quot;advertencias&quot;      &quot;datos&quot;             &quot;meta&quot;</span></span></code></pre></div>
+<p>Cada componente es una tabla o una lista de tablas, y casi todos se pueden obtener sueltos con su propia función:</p>
+<table>
+<colgroup>
+<col width="33%"></col>
+<col width="33%"></col>
+<col width="33%"></col>
+</colgroup>
+<thead>
+<tr class="header">
+<th>componente</th>
+<th>qué contiene</th>
+<th>función suelta</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>perfil</code></td>
+<td>hallazgos, resumen por columna, patrones, formatos de fecha, cobertura de diagnósticos</td>
+<td><code>perfilar()</code></td>
+</tr>
+<tr class="even">
+<td><code>variables</code></td>
+<td>tipo implícito, escala y rol propuestos para cada columna</td>
+<td><code>clasificar_variables()</code></td>
+</tr>
+<tr class="odd">
+<td><code>distribuciones</code></td>
+<td>frecuencias, cuantiles y su alcance</td>
+<td><code>distribucion_valores()</code></td>
+</tr>
+<tr class="even">
+<td><code>asociaciones</code></td>
+<td>una medida por cada par de columnas que se mueven juntas</td>
+<td><code>detectar_asociaciones()</code></td>
+</tr>
+<tr class="odd">
+<td><code>temporal</code></td>
+<td>período observado, huecos y frecuencia propuesta</td>
+<td><code>analizar_tiempo()</code></td>
+</tr>
+<tr class="even">
+<td><code>propuesta_modelo</code>, <code>decision_medicion</code></td>
+<td>las métricas sugeridas y cuáles se midieron</td>
+<td><code>proponer_modelo()</code></td>
+</tr>
+<tr class="odd">
+<td><code>tablero</code>, <code>medicion</code></td>
+<td>la medición agregada</td>
+<td><code>medir()</code>, <code>agregar()</code>, <code>tablero_calidad()</code></td>
+</tr>
+<tr class="even">
+<td><code>cobertura</code></td>
+<td>qué factores del marco de calidad quedaron medidos</td>
+<td><code>cobertura_analisis()</code></td>
+</tr>
+<tr class="odd">
+<td><code>plan_limpieza</code></td>
+<td>acciones posibles, ninguna aplicada</td>
+<td><code>planificar_limpieza()</code></td>
+</tr>
+<tr class="even">
+<td><code>advertencias</code></td>
+<td>lo que el análisis propuso y queda por confirmar</td>
+<td>—</td>
+</tr>
+<tr class="odd">
+<td><code>meta</code></td>
+<td>nombre, fecha y qué decisiones tomó la corrida</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>Los accesores del perfil también leen el análisis: <code>hallazgos(analisis)</code> es lo mismo que <code>hallazgos(analisis$perfil)</code>. Miramos los de una columna que vamos a seguir en toda la guía, <code>fecha_evento</code>:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true"></a>h &lt;-<span class="st"> </span><span class="kw">hallazgos</span>(analisis)</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true"></a>h[h<span class="op">$</span>columna <span class="op">%in%</span><span class="st"> &quot;fecha_evento&quot;</span>, <span class="kw">c</span>(<span class="st">&quot;tipo_hallazgo&quot;</span>, <span class="st">&quot;severidad&quot;</span>, <span class="st">&quot;n_afectados&quot;</span>)]</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true"></a><span class="co">#&gt;                  tipo_hallazgo  severidad n_afectados</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true"></a><span class="co">#&gt; 4            alta_cardinalidad sospechoso           1</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true"></a><span class="co">#&gt; 5        faltantes_disfrazados      error           1</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true"></a><span class="co">#&gt; 6        formatos_fecha_mixtos      error           5</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true"></a><span class="co">#&gt; 7      tipo_declarado_distinto sospechoso           1</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true"></a><span class="co">#&gt; 18 casi_duplicados_vocabulario         ok           0</span></span></code></pre></div>
+<p>Cómo se lee cada hallazgo está en <a href="leer-un-perfil.html">2. Leer un perfil</a>. Acá miramos lo que hay debajo: los valores que los producen.</p>
+</div>
+<div id="patrones-la-forma-de-los-valores" class="section level2">
+<h2>Patrones: la forma de los valores</h2>
+<p>Un patrón resume la forma de un valor: <code>A</code> es una letra mayúscula, <code>a</code> una minúscula, <code>9</code> un dígito, y <code>+</code> indica que se repite. <code>descubrir_patrones()</code> recibe un vector, no una tabla, y cuenta cuántos valores tienen cada forma:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true"></a><span class="kw">descubrir_patrones</span>(datos_operativos<span class="op">$</span>codigo_usuario)</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true"></a><span class="co">#&gt;   patron  n proporcion                    ejemplos</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true"></a><span class="co">#&gt; 1  A+-9+ 10 0.76923077 USR-001 | USR-002 | USR-004</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true"></a><span class="co">#&gt; 2   A+-9  1 0.07692308                       MAL-5</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true"></a><span class="co">#&gt; 3   A+9+  1 0.07692308                     USR0003</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true"></a><span class="co">#&gt; 4    A/A  1 0.07692308                         S/D</span></span></code></pre></div>
+<p>La mayoría de los códigos tiene la forma <code>USR-001</code>. Se apartan <code>MAL-5</code>, <code>USR0003</code> y <code>S/D</code>: el último ya figura en el perfil como faltante disfrazado, y los otros dos son los que habría que revisar en el sistema de origen. El análisis guarda la misma tabla para cada columna en <code>analisis$perfil$patrones</code>.</p>
+</div>
+<div id="tipos-y-fechas" class="section level2">
+<h2>Tipos y fechas</h2>
+<p><code>fecha_evento</code> se guarda como texto. Eso no impide proponer un tipo implícito, ni contar los formatos de fecha por separado:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true"></a><span class="kw">inferir_tipo</span>(datos_operativos<span class="op">$</span>fecha_evento)</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true"></a><span class="co">#&gt; fecha (84.6%; 11 de 13 valores compatibles)</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true"></a>formatos &lt;-<span class="st"> </span><span class="kw">detectar_formatos_fecha</span>(datos_operativos<span class="op">$</span>fecha_evento)</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true"></a>formatos[, <span class="kw">c</span>(<span class="st">&quot;formato&quot;</span>, <span class="st">&quot;n&quot;</span>, <span class="st">&quot;proporcion&quot;</span>, <span class="st">&quot;estado&quot;</span>, <span class="st">&quot;n_ambiguos&quot;</span>)]</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true"></a><span class="co">#&gt;    formato n proporcion     estado n_ambiguos</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true"></a><span class="co">#&gt; 1 %Y-%m-%d 4 0.30769231 confirmado          0</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true"></a><span class="co">#&gt; 2 %d/%m/%Y 4 0.30769231 confirmado          0</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true"></a><span class="co">#&gt; 3   %Y%m%d 1 0.07692308 confirmado          0</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true"></a><span class="co">#&gt; 4 %Y/%m/%d 1 0.07692308 confirmado          0</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true"></a><span class="co">#&gt; 5 %d-%m-%Y 1 0.07692308 confirmado          0</span></span></code></pre></div>
+<p>De los 13 valores, 11 se leen como fecha, en 5 formatos distintos; los que no se leen son <code>2024.04.17</code> y <code>NULL</code>. Estas salidas describen compatibilidad y frecuencia: no convierten la columna ni afirman qué formato debe aceptar el sistema.</p>
+<p>Que todos los valores sean compatibles tampoco alcanza. Una columna hecha sólo de fechas como <code>01/02/2020</code> puede leerse al cien por ciento y seguir siendo ambigua: sin una convención externa no se sabe si el primer número es el día o el mes. El perfil conserva esa diferencia en <code>estado_tipo_inferido</code>:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true"></a>ambigua &lt;-<span class="st"> </span><span class="kw">perfilar</span>(</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true"></a>  <span class="kw">data.frame</span>(<span class="dt">fecha =</span> <span class="kw">c</span>(<span class="st">&quot;01/02/2020&quot;</span>, <span class="st">&quot;02/03/2020&quot;</span>, <span class="st">&quot;03/04/2020&quot;</span>)),</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true"></a>  <span class="dt">muestra =</span> <span class="ot">Inf</span>,</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true"></a>  <span class="dt">analizar_dependencias =</span> <span class="ot">FALSE</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true"></a>)</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true"></a>campos &lt;-<span class="st"> </span><span class="kw">c</span>(</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true"></a>  <span class="st">&quot;columna&quot;</span>, <span class="st">&quot;tipo_inferido&quot;</span>, <span class="st">&quot;proporcion_tipo_inferido&quot;</span>, <span class="st">&quot;estado_tipo_inferido&quot;</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true"></a>)</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true"></a><span class="kw">rbind</span>(</span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true"></a>  <span class="kw">columnas</span>(analisis)[<span class="kw">columnas</span>(analisis)<span class="op">$</span>columna <span class="op">==</span><span class="st"> &quot;fecha_evento&quot;</span>, campos],</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true"></a>  <span class="kw">columnas</span>(ambigua)[, campos]</span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true"></a>)</span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true"></a><span class="co">#&gt;        columna tipo_inferido proporcion_tipo_inferido estado_tipo_inferido</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true"></a><span class="co">#&gt; 3 fecha_evento         fecha                0.8461538           confirmado</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true"></a><span class="co">#&gt; 1        fecha         fecha                1.0000000            candidato</span></span></code></pre></div>
+<p>En <code>fecha_evento</code> el estado es <code>confirmado</code> aunque haya valores que no se leen, porque valores como <code>31/01/2024</code> sólo admiten una lectura. En la columna construida, la proporción es 1 y el estado es <code>candidato</code>: la lectura todavía no está establecida.</p>
+</div>
+<div id="escalas-y-roles-propuestos" class="section level2">
+<h2>Escalas y roles propuestos</h2>
+<p><code>variables</code> separa el tipo de almacenamiento, el tipo implícito y la escala de medición, y propone un rol para cada columna. Es la salida de <code>clasificar_variables()</code>:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true"></a>analisis<span class="op">$</span>variables[, <span class="kw">c</span>(</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true"></a>  <span class="st">&quot;columna&quot;</span>, <span class="st">&quot;tipo_implicito&quot;</span>, <span class="st">&quot;escala_propuesta&quot;</span>, <span class="st">&quot;rol&quot;</span>, <span class="st">&quot;confianza&quot;</span>, <span class="st">&quot;confirmada&quot;</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true"></a>)]</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true"></a><span class="co">#&gt;           columna tipo_implicito escala_propuesta           rol confianza confirmada</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true"></a><span class="co">#&gt; 1     id_registro          doble         discreta        medida      0.65      FALSE</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true"></a><span class="co">#&gt; 2  codigo_usuario          texto          nominal     categoria      0.55      FALSE</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true"></a><span class="co">#&gt; 3    fecha_evento          fecha         temporal         fecha      0.85      FALSE</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true"></a><span class="co">#&gt; 4           canal          texto          nominal     categoria      0.55      FALSE</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true"></a><span class="co">#&gt; 5           monto          doble         discreta        medida      0.65      FALSE</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true"></a><span class="co">#&gt; 6            zona          texto          nominal     categoria      0.55      FALSE</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true"></a><span class="co">#&gt; 7         sistema          texto          nominal     categoria      0.55      FALSE</span></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true"></a><span class="co">#&gt; 8        contacto          texto          nominal     categoria      0.55      FALSE</span></span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true"></a><span class="co">#&gt; 9        id_copia          doble         discreta        medida      0.65      FALSE</span></span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true"></a><span class="co">#&gt; 10      id_evento  identificador          nominal identificador      0.90      FALSE</span></span></code></pre></div>
+<p><code>confianza</code> expone la fuerza de cada propuesta y <code>confirmada</code> distingue una declaración de una inferencia. Sin metadatos, ninguna está confirmada. <code>id_registro</code> sale como una medida discreta: por sus valores, un identificador numérico no se distingue de una cantidad. Quien conoce la columna lo declara, con <code>metadatos_variables</code> o con <code>columnas_codigo</code> (ver la tabla final de <a href="vacio-por-diseno.html">5. El vacío por diseño</a>).</p>
+</div>
+<div id="distribuciones" class="section level2">
+<h2>Distribuciones</h2>
+<p><code>distribuciones</code> trae las frecuencias de cada columna y los cuantiles de las numéricas:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true"></a>frecuencias &lt;-<span class="st"> </span>analisis<span class="op">$</span>distribuciones<span class="op">$</span>frecuencias</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true"></a>frecuencias[frecuencias<span class="op">$</span>columna <span class="op">==</span><span class="st"> &quot;canal&quot;</span>, <span class="kw">c</span>(<span class="st">&quot;valor&quot;</span>, <span class="st">&quot;frecuencia&quot;</span>, <span class="st">&quot;proporcion&quot;</span>)]</span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true"></a><span class="co">#&gt;         valor frecuencia proporcion</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true"></a><span class="co">#&gt; 35        web          5 0.38461538</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true"></a><span class="co">#&gt; 36   telefono          2 0.15384615</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true"></a><span class="co">#&gt; 37                     1 0.07692308</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true"></a><span class="co">#&gt; 38        APP          1 0.07692308</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true"></a><span class="co">#&gt; 39        S/D          1 0.07692308</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true"></a><span class="co">#&gt; 40        Web          1 0.07692308</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true"></a><span class="co">#&gt; 41 presencial          1 0.07692308</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true"></a><span class="co">#&gt; 42       web           1 0.07692308</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true"></a></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true"></a>cuantiles &lt;-<span class="st"> </span>analisis<span class="op">$</span>distribuciones<span class="op">$</span>cuantiles</span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true"></a>cuantiles[cuantiles<span class="op">$</span>columna <span class="op">==</span><span class="st"> &quot;monto&quot;</span>, <span class="kw">c</span>(<span class="st">&quot;probabilidad&quot;</span>, <span class="st">&quot;valor&quot;</span>, <span class="st">&quot;n_analizados&quot;</span>)]</span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true"></a><span class="co">#&gt;    probabilidad  valor n_analizados</span></span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true"></a><span class="co">#&gt; 6          0.00    -99           13</span></span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true"></a><span class="co">#&gt; 7          0.25   1250           13</span></span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true"></a><span class="co">#&gt; 8          0.50   1490           13</span></span>
+<span id="cb7-19"><a href="#cb7-19" aria-hidden="true"></a><span class="co">#&gt; 9          0.75   1700           13</span></span>
+<span id="cb7-20"><a href="#cb7-20" aria-hidden="true"></a><span class="co">#&gt; 10         1.00 999999           13</span></span></code></pre></div>
+<p>Las frecuencias cuentan lo que hay guardado, sin unir variantes: entre los valores de <code>canal</code> aparecen la celda vacía, <code>S/D</code>, <code>Web</code> y <code>&quot;web &quot;</code>, con un espacio al final.</p>
+<p>Los cuantiles de <code>monto</code> van de <code>-99</code> a <code>999999</code>. El perfil señaló <code>-99</code> como posible faltante disfrazado, pero un valor sospechado sólo se informa: no sale de los números mientras no se lo declare con <code>sentinelas_numericos</code>. <code>analisis$distribuciones$alcance</code> dice, columna por columna, cuántas filas se analizaron y si la lista de valores se recortó.</p>
+</div>
+<div id="asociaciones" class="section level2">
+<h2>Asociaciones</h2>
+<p>Cada fila de <code>asociaciones</code> es una medida entre dos columnas, con el método que se usó: Pearson entre numéricas, eta cuadrado entre una categoría y un número, V de Cramér entre dos categorías. La columna <code>supuesto</code> dice cómo se trató cada escala.</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true"></a>analisis<span class="op">$</span>asociaciones[, <span class="kw">c</span>(<span class="st">&quot;columna_1&quot;</span>, <span class="st">&quot;columna_2&quot;</span>, <span class="st">&quot;metodo&quot;</span>, <span class="st">&quot;asociacion&quot;</span>)]</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true"></a><span class="co">#&gt;     columna_1 columna_2           metodo asociacion</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true"></a><span class="co">#&gt; 1 id_registro  id_copia pearson_absoluto  1.0000000</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true"></a><span class="co">#&gt; 2       canal     monto             eta2  0.9999977</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true"></a><span class="co">#&gt; 3       canal      zona         cramer_v  0.8944272</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true"></a><span class="co">#&gt; 4 id_registro     monto pearson_absoluto  0.4301569</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true"></a><span class="co">#&gt; 5       monto  id_copia pearson_absoluto  0.4301569</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true"></a><span class="co">#&gt; 6       canal  id_copia             eta2  0.3791539</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true"></a><span class="co">#&gt; 7 id_registro     canal             eta2  0.3791539</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true"></a><span class="co">#&gt; 8 id_registro      zona             eta2  0.3440367</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true"></a><span class="co">#&gt; 9        zona  id_copia             eta2  0.3440367</span></span></code></pre></div>
+<p>Son medidas, no dependencias ni instrucciones de modelado, y conviene leerlas con los datos a la vista. <code>id_registro</code> e <code>id_copia</code> se asocian al máximo porque una es copia de la otra, algo que el perfil ya informó como <code>columnas_duplicadas</code>. La asociación de <code>canal</code> con <code>monto</code> la produce casi entera la fila 13, donde <code>canal</code> está vacío y <code>monto</code> vale <code>999999</code>: sin esa fila, la medida baja a 0,65. Para una relación monótona que no es lineal, <code>metodo_asociacion_numerica = &quot;spearman&quot;</code> cambia Pearson por Spearman.</p>
+</div>
+<div id="tiempo" class="section level2">
+<h2>Tiempo</h2>
+<p><code>analizar_tiempo()</code> reconoce <code>fecha_evento</code> por su contenido, aunque se guarde como texto, y resume el período observado:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true"></a>analisis<span class="op">$</span>temporal<span class="op">$</span>resumen[, <span class="kw">c</span>(</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true"></a>  <span class="st">&quot;columna&quot;</span>, <span class="st">&quot;n_presentes&quot;</span>, <span class="st">&quot;fecha_minima&quot;</span>, <span class="st">&quot;fecha_maxima&quot;</span>, <span class="st">&quot;n_fechas_excluidas_parseo&quot;</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true"></a>)]</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true"></a><span class="co">#&gt;        columna n_presentes fecha_minima fecha_maxima n_fechas_excluidas_parseo</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true"></a><span class="co">#&gt; 1 fecha_evento          11   2024-01-31   2024-10-23                         2</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true"></a>analisis<span class="op">$</span>temporal<span class="op">$</span>propuestas[, <span class="kw">c</span>(<span class="st">&quot;columna&quot;</span>, <span class="st">&quot;frecuencia_dias&quot;</span>, <span class="st">&quot;confirmada&quot;</span>)]</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true"></a><span class="co">#&gt;        columna frecuencia_dias confirmada</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true"></a><span class="co">#&gt; 1 fecha_evento              32      FALSE</span></span></code></pre></div>
+<p>Las fechas que no se pudieron leer quedan contadas aparte, en <code>n_fechas_excluidas_parseo</code>. La frecuencia propuesta es la moda de los intervalos observados y sale con <code>confirmada = FALSE</code>: es evidencia para revisar, no un requisito. <code>advertencias</code> lo repite junto con las escalas sin confirmar, para que no pase inadvertido.</p>
+</div>
+<div id="lo-que-analizar-mide-por-su-cuenta" class="section level2">
+<h2>Lo que <code>analizar()</code> mide por su cuenta</h2>
+<p><code>analizar()</code> no se queda en describir. Toma la propuesta de métricas que arma <code>proponer_modelo()</code> a partir del perfil, mide lo que esa propuesta deja activo y agrega el resultado en un tablero: la tabla que resume la medición con una fila por métrica y objeto, y cuya columna <code>orientacion</code> dice cómo leer cada valor.</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true"></a>analisis<span class="op">$</span>propuesta_modelo[, <span class="kw">c</span>(<span class="st">&quot;metrica&quot;</span>, <span class="st">&quot;atributos&quot;</span>, <span class="st">&quot;origen&quot;</span>, <span class="st">&quot;incluir&quot;</span>)]</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true"></a><span class="co">#&gt;                        metrica      atributos                             origen incluir</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true"></a><span class="co">#&gt; 1             EntidadDuplicada                         hallazgo:filas_duplicadas    TRUE</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true"></a><span class="co">#&gt; 2                       NoNulo          canal                 hallazgo:faltantes    TRUE</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true"></a><span class="co">#&gt; 3                       NoNulo codigo_usuario     hallazgo:faltantes_disfrazados    TRUE</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true"></a><span class="co">#&gt; 4                       NoNulo   fecha_evento     hallazgo:faltantes_disfrazados    TRUE</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true"></a><span class="co">#&gt; 5                       NoNulo          monto     hallazgo:faltantes_disfrazados    TRUE</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true"></a><span class="co">#&gt; 6                      Formato       contacto perfil:patron_dominante:a+9+@a+.a+   FALSE</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true"></a><span class="co">#&gt; 7                      Formato      id_evento       perfil:patron_dominante:A+9+   FALSE</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true"></a><span class="co">#&gt; 8                      Formato        sistema         perfil:patron_dominante:a+   FALSE</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true"></a><span class="co">#&gt; 9                      Formato           zona        perfil:patron_dominante:Aa+   FALSE</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true"></a><span class="co">#&gt; 10 ValoresPosiblesPorExtension           zona           perfil:dominio_observado   FALSE</span></span></code></pre></div>
+<p>Las filas activas (<code>incluir = TRUE</code>) salen de hallazgos: los duplicados exactos y los faltantes, contando como faltante lo que el perfil vio disfrazado. Los formatos y el dominio de <code>zona</code> se aprendieron de esta misma entrega, y medirlos contra ella sería circular: el dominio observado da 1 por construcción, y cada formato da la proporción del patrón dominante que el perfil ya mostró. Por eso quedan inactivos hasta que confirmemos que son requisitos. <code>decision_medicion</code> dice, fila por fila, qué se midió, y el tablero muestra el resultado:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true"></a>analisis<span class="op">$</span>decision_medicion[, <span class="kw">c</span>(<span class="st">&quot;metrica&quot;</span>, <span class="st">&quot;objeto&quot;</span>, <span class="st">&quot;medida&quot;</span>)]</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true"></a><span class="co">#&gt;                        metrica         objeto medida</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true"></a><span class="co">#&gt; 1             EntidadDuplicada        (tabla)   TRUE</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true"></a><span class="co">#&gt; 2                       NoNulo          canal   TRUE</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true"></a><span class="co">#&gt; 3                       NoNulo codigo_usuario   TRUE</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true"></a><span class="co">#&gt; 4                       NoNulo   fecha_evento   TRUE</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true"></a><span class="co">#&gt; 5                       NoNulo          monto   TRUE</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true"></a><span class="co">#&gt; 6                      Formato       contacto  FALSE</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true"></a><span class="co">#&gt; 7                      Formato      id_evento  FALSE</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true"></a><span class="co">#&gt; 8                      Formato        sistema  FALSE</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true"></a><span class="co">#&gt; 9                      Formato           zona  FALSE</span></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true"></a><span class="co">#&gt; 10 ValoresPosiblesPorExtension           zona  FALSE</span></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true"></a>analisis<span class="op">$</span>tablero[, <span class="kw">c</span>(<span class="st">&quot;metrica_instanciada&quot;</span>, <span class="st">&quot;valor&quot;</span>, <span class="st">&quot;orientacion&quot;</span>)]</span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true"></a><span class="co">#&gt; </span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true"></a><span class="co">#&gt; ── Tablero de calidad ────────────────────────────────────────────────────────────────────</span></span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true"></a><span class="co">#&gt;    metrica_instanciada     valor orientacion</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true"></a><span class="co">#&gt;       EntidadDuplicada 0.1538462     defecto</span></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true"></a><span class="co">#&gt;           NoNulo:canal 0.8461538 conformidad</span></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true"></a><span class="co">#&gt;  NoNulo:codigo_usuario 0.9230769 conformidad</span></span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true"></a><span class="co">#&gt;    NoNulo:fecha_evento 0.9230769 conformidad</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true"></a><span class="co">#&gt;           NoNulo:monto 0.9230769 conformidad</span></span></code></pre></div>
+<p><code>valor</code> es una proporción. Con <code>orientacion = &quot;conformidad&quot;</code> se lee “más es mejor”, y con <code>&quot;defecto&quot;</code>, al revés: <code>EntidadDuplicada</code> es la proporción de filas que participan en duplicados. <code>meta$propuesta_medida_automaticamente</code> deja constancia de que la selección la hizo <code>lupa</code> y nadie la confirmó.</p>
+<p>Para quedarnos sólo con la descripción, <code>medir_propuesta = FALSE</code>. Para medir lo que decidimos nosotros, editamos la propuesta y la pasamos como <code>propuesta_confirmada</code>; ese camino sigue en <a href="https://sebollin.github.io/lupa/articles/del-hallazgo-a-la-metrica.html">7. Del hallazgo a la métrica</a>. <code>cobertura</code>, por su parte, dice qué factores del marco de calidad quedaron medidos (por omisión, el de AGESIC); los marcos se explican en <a href="https://sebollin.github.io/lupa/articles/marcos-y-modelos.html">8. Marcos y modelos de calidad</a>.</p>
+</div>
+<div id="perfilar-o-analizar" class="section level2">
+<h2>¿<code>perfilar()</code> o <code>analizar()</code>?</h2>
+<p><code>perfilar()</code> es la pasada que conviene llevar a todos lados: resúmenes por columna, patrones, tipos, hallazgos, cobertura de diagnósticos y relaciones entre columnas. <code>analizar()</code> arma alrededor de ese perfil lo que cuesta más y devuelve tablas propias: distribuciones, asociaciones, tiempo, escalas, la propuesta medida, el plan y el tablero. Cada pieza está exportada, así que se puede llamar suelta sin pagar el recorrido entero. Por ejemplo, las frecuencias de una sola columna, con un tope de tres valores:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true"></a>zona &lt;-<span class="st"> </span><span class="kw">distribucion_valores</span>(datos_operativos[<span class="st">&quot;zona&quot;</span>], <span class="dt">max_valores =</span> <span class="dv">3</span>)</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true"></a>zona<span class="op">$</span>frecuencias[, <span class="kw">c</span>(<span class="st">&quot;valor&quot;</span>, <span class="st">&quot;frecuencia&quot;</span>)]</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true"></a><span class="co">#&gt;    valor frecuencia</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true"></a><span class="co">#&gt; 1 Centro          3</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true"></a><span class="co">#&gt; 2  Norte          3</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true"></a><span class="co">#&gt; 3  Oeste          3</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true"></a>zona<span class="op">$</span>alcance[, <span class="kw">c</span>(<span class="st">&quot;columna&quot;</span>, <span class="st">&quot;n_distintos_muestra&quot;</span>, <span class="st">&quot;n_mostrados&quot;</span>, <span class="st">&quot;truncado&quot;</span>)]</span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true"></a><span class="co">#&gt;   columna n_distintos_muestra n_mostrados truncado</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true"></a><span class="co">#&gt; 1    zona                   5           3     TRUE</span></span></code></pre></div>
+<p><code>zona</code> tiene 5 valores distintos y se muestran 3: el recorte queda declarado en <code>truncado</code>.</p>
+<p>Las dos funciones trabajan en memoria, y sobre tablas de millones de filas no son una pasada rápida. A esa escala conviene perfilar una muestra y llamar sueltas las piezas que hagan falta, o perfilar dentro de la base con <code>perfilar_dbi()</code>, que calcula los agregados en el motor y deja elegir cuántas filas trae a R (ver <a href="https://sebollin.github.io/lupa/articles/perfilar-una-base.html">10. Perfilar una base</a>). Los tiempos medidos sobre tablas de ese tamaño, con su fecha y su entorno, están en el artículo <a href="https://sebollin.github.io/lupa/articles/evidencia-y-rendimiento.html">Evidencia y rendimiento</a>. La muestra que <code>perfilar()</code> toma por su cuenta es sistemática y sin azar: sobre los mismos datos, el mismo perfil se rehace igual.</p>
+</div>
+<div id="compartir-el-análisis" class="section level2">
+<h2>Compartir el análisis</h2>
+<p><code>guardar_analisis()</code> escribe el análisis en un archivo RDS con número de esquema, y <code>leer_analisis()</code> lo recupera en otra sesión. Por omisión no guarda la tabla de entrada y reemplaza las reglas escritas como funciones por declaraciones pequeñas, para no serializar sus entornos. <code>meta$persistencia</code> declara qué se guardó y qué no:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true"></a>archivo_rds &lt;-<span class="st"> </span><span class="kw">tempfile</span>(<span class="dt">fileext =</span> <span class="st">&quot;.rds&quot;</span>)</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true"></a><span class="kw">guardar_analisis</span>(analisis, archivo_rds)</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true"></a>recuperado &lt;-<span class="st"> </span><span class="kw">leer_analisis</span>(archivo_rds)</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true"></a><span class="kw">str</span>(recuperado<span class="op">$</span>meta<span class="op">$</span>persistencia)</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true"></a><span class="co">#&gt; List of 4</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true"></a><span class="co">#&gt;  $ version_esquema      : int 1</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true"></a><span class="co">#&gt;  $ datos_incluidos      : logi FALSE</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true"></a><span class="co">#&gt;  $ evidencia_protegida  : logi FALSE</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true"></a><span class="co">#&gt;  $ funciones_sustituidas: int 0</span></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true"></a><span class="kw">identical</span>(<span class="kw">hallazgos</span>(recuperado), <span class="kw">hallazgos</span>(analisis))</span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true"></a><span class="co">#&gt; [1] TRUE</span></span></code></pre></div>
+<p><code>reportar()</code> convierte el análisis en un HTML autocontenido, que se abre en cualquier navegador sin instalar nada. También acepta perfiles, mediciones, evaluaciones y planes sueltos; un análisis ya los trae. Estas son las secciones del informe:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true"></a>archivo_html &lt;-<span class="st"> </span><span class="kw">reportar</span>(</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true"></a>  analisis,</span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true"></a>  <span class="dt">archivo =</span> <span class="kw">tempfile</span>(<span class="dt">fileext =</span> <span class="st">&quot;.html&quot;</span>),</span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true"></a>  <span class="dt">titulo =</span> <span class="st">&quot;Calidad de la entrega de ejemplo&quot;</span>,</span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true"></a>  <span class="dt">fecha =</span> <span class="kw">as.POSIXct</span>(<span class="st">&quot;2026-01-15&quot;</span>, <span class="dt">tz =</span> <span class="st">&quot;UTC&quot;</span>)</span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true"></a>)</span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true"></a>html &lt;-<span class="st"> </span><span class="kw">readLines</span>(archivo_html, <span class="dt">encoding =</span> <span class="st">&quot;UTF-8&quot;</span>, <span class="dt">warn =</span> <span class="ot">FALSE</span>)</span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true"></a>secciones &lt;-<span class="st"> </span><span class="kw">regmatches</span>(html, <span class="kw">gregexpr</span>(<span class="st">&quot;&lt;h2&gt;[^&lt;]*&lt;/h2&gt;&quot;</span>, html))[[<span class="dv">1</span>]]</span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true"></a><span class="kw">gsub</span>(<span class="st">&quot;&lt;/?h2&gt;&quot;</span>, <span class="st">&quot;&quot;</span>, secciones)</span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true"></a><span class="co">#&gt;  [1] &quot;Análisis integral&quot;                   &quot;Advertencias de alcance&quot;            </span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true"></a><span class="co">#&gt;  [3] &quot;Perfil de datos: entrega de ejemplo&quot; &quot;Distribuciones y cuantiles&quot;         </span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true"></a><span class="co">#&gt;  [5] &quot;Asociaciones entre columnas&quot;         &quot;Análisis temporal&quot;                  </span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true"></a><span class="co">#&gt;  [7] &quot;Escalas y roles propuestos&quot;          &quot;Propuesta de modelo&quot;                </span></span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true"></a><span class="co">#&gt;  [9] &quot;Tablero de calidad&quot;                  &quot;Medidas de calidad&quot;                 </span></span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true"></a><span class="co">#&gt; [11] &quot;Plan de limpieza&quot;</span></span></code></pre></div>
+<p>En una sesión propia, <code>browseURL(archivo_html)</code> lo abre en el navegador; acá borramos los dos archivos al terminar. Con <code>proteger_datos_personales = TRUE</code>, el informe enmascara los valores de las columnas que parecen datos personales; el alcance de esa protección está en el artículo <a href="https://sebollin.github.io/lupa/articles/alcance-y-cobertura.html">Alcance y cobertura</a>.</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true"></a><span class="kw">unlink</span>(<span class="kw">c</span>(archivo_html, archivo_rds))</span></code></pre></div>
+</div>
+<div id="resumen" class="section level2">
+<h2>Resumen</h2>
+<ul>
+<li><code>analizar()</code> arma en una llamada el perfil y todo lo que lo rodea; cada componente es una tabla, y cada pieza se puede llamar suelta.</li>
+<li>Patrones, tipos y fechas describen compatibilidad y frecuencia: no convierten nada ni confirman un formato.</li>
+<li>Escalas y frecuencias temporales son propuestas sin confirmar; las asociaciones son medidas, y se leen con los datos a la vista.</li>
+<li>Por omisión, <code>analizar()</code> mide lo que la propuesta deja activo; <code>decision_medicion</code> dice qué se midió y <code>medir_propuesta = FALSE</code> lo apaga.</li>
+<li><code>guardar_analisis()</code> guarda el recorrido sin los datos, y <code>reportar()</code> lo vuelve un HTML autocontenido.</li>
+</ul>
+</div>
+<div id="paso-siguiente" class="section level2">
+<h2>Paso siguiente</h2>
+<p><a href="estructura-no-declarada.html">4. Estructura no declarada</a> (<code>vignette(&quot;estructura-no-declarada&quot;)</code>): claves, relaciones y dependencias entre tablas que nadie documentó.</p>
+</div>
+
+
+
+<!-- code folding -->
+
+
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+  (function () {
+    var script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src  = "https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML";
+    document.getElementsByTagName("head")[0].appendChild(script);
+  })();
+</script>
+
+</body>
+</html>
