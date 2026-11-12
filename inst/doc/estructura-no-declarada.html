@@ -356,20 +356,20 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 
 
 
-<p>Una entrega puede llegar sin diccionario, sin claves y sin relaciones declaradas. ¿Qué estructura cumplen de hecho los datos recibidos, y qué parte de esa estructura todavía hay que confirmar con quien conoce el sistema?</p>
+<p>Una entrega puede llegar sin diccionario, sin claves y sin relaciones declaradas. ¿Qué estructura cumplen de hecho los datos recibidos? ¿Y qué parte todavía hay que confirmar con quien conoce el sistema?</p>
 <blockquote>
 <p><strong>En esta guía:</strong></p>
 <ul>
 <li>buscamos una clave candidata con <code>detectar_claves()</code>;</li>
-<li>comparamos dos tablas con <code>detectar_relaciones()</code> y leemos su cardinalidad;</li>
+<li>comparamos 2 tablas con <code>detectar_relaciones()</code> y leemos su cardinalidad;</li>
 <li>encontramos una dependencia entre columnas con <code>detectar_dependencias()</code>;</li>
 <li>separamos lo que se cumple en estos datos de lo que es una regla del sistema.</li>
 </ul>
 </blockquote>
 <div id="dos-tablas-que-se-pueden-seguir-fila-por-fila" class="section level2">
-<h2>Dos tablas que se pueden seguir fila por fila</h2>
-<p>Los conjuntos incluidos en <code>lupa</code> sirven para examinar columnas, pero no contienen una clave exacta: en <code>datos_operativos</code>, <code>id_evento</code> tiene 12 valores distintos en 13 filas. Sobre ellos, <code>detectar_claves()</code> y <code>detectar_dependencias()</code> devolverían tablas sin filas.</p>
-<p>Para ver una clave, una relación y una dependencia construimos dos tablas chicas: una de personas y otra de trámites. Cada conclusión se puede contrastar con las filas impresas.</p>
+<h2>2 tablas que se pueden seguir fila por fila</h2>
+<p>Los conjuntos incluidos en <code>lupa</code> sirven para examinar columnas, pero no contienen una clave exacta. En <code>datos_operativos</code>, <code>id_evento</code> tiene 12 valores distintos en 13 filas. Sobre ellos, <code>detectar_claves()</code> y <code>detectar_dependencias()</code> devolverían tablas sin filas.</p>
+<p>Para ver una clave, una relación y una dependencia construimos 2 tablas chicas: una de personas y otra de trámites. Cada conclusión se puede contrastar con las filas impresas.</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true"></a><span class="kw">library</span>(lupa)</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true"></a>personas &lt;-<span class="st"> </span><span class="kw">data.frame</span>(</span>
@@ -421,11 +421,11 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb2-4"><a href="#cb2-4" aria-hidden="true"></a>)]</span>
 <span id="cb2-5"><a href="#cb2-5" aria-hidden="true"></a><span class="co">#&gt;     columnas n_columnas n_filas casi_clave unicidad_exacta</span></span>
 <span id="cb2-6"><a href="#cb2-6" aria-hidden="true"></a><span class="co">#&gt; 1 id_persona          1       8      FALSE            TRUE</span></span></code></pre></div>
-<p><code>nombre</code>, <code>ciudad</code> y <code>departamento</code> se repiten, así que no aparecen. Que una columna identifique cada fila en esta entrega la vuelve candidata, no clave: una magnitud que no repite valores también pasaría. Declarar la clave al perfilar, con <code>perfilar(clave = ...)</code>, es lo que permite ir de un hallazgo a la fila en el sistema de origen; eso se explica en <a href="leer-un-perfil.html">2. Leer un perfil</a>.</p>
+<p><code>nombre</code>, <code>ciudad</code> y <code>departamento</code> se repiten, así que no aparecen. Que una columna identifique cada fila en esta entrega la vuelve candidata, no clave: una magnitud que no repite valores también pasaría. Declarar la clave al perfilar, con <code>perfilar(clave = ...)</code>, permite ir de un hallazgo a la fila en el sistema de origen. Eso se explica en <a href="leer-un-perfil.html">2. Leer un perfil</a>.</p>
 </div>
 <div id="una-relación-entre-dos-tablas" class="section level2">
-<h2>Una relación entre dos tablas</h2>
-<p><code>id_persona</code> también está en <code>tramites</code>, y ahí se repite: una persona puede tener más de un trámite. <code>detectar_relaciones()</code> recibe las dos columnas de identificación y compara sus valores:</p>
+<h2>Una relación entre 2 tablas</h2>
+<p><code>id_persona</code> también está en <code>tramites</code>, y ahí se repite: una persona puede tener más de un trámite. <code>detectar_relaciones()</code> recibe las 2 columnas de identificación y compara sus valores:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true"></a><span class="kw">detectar_relaciones</span>(</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true"></a>  personas[<span class="st">&quot;id_persona&quot;</span>], tramites[<span class="st">&quot;id_persona&quot;</span>], <span class="dt">muestra =</span> <span class="ot">Inf</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true"></a>)</span>
@@ -433,11 +433,11 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb3-5"><a href="#cb3-5" aria-hidden="true"></a><span class="co">#&gt; 1     id_persona     id_persona          1:m                 8                          1</span></span>
 <span id="cb3-6"><a href="#cb3-6" aria-hidden="true"></a><span class="co">#&gt;   cobertura_tabla2_en_tabla1 motivo_poda</span></span>
 <span id="cb3-7"><a href="#cb3-7" aria-hidden="true"></a><span class="co">#&gt; 1                          1        &lt;NA&gt;</span></span></code></pre></div>
-<p>La cardinalidad es 1:m, uno a muchos. Las dos coberturas valen 1 porque todos los identificadores de cada lado aparecen en el otro: no hay trámites de personas que no estén en <code>personas</code>, ni personas sin trámites. <code>muestra = Inf</code> deja explícito que se comparan todos los valores.</p>
+<p>La cardinalidad es 1:m, uno a muchos. Las 2 coberturas valen 1 porque todos los identificadores de cada lado aparecen en el otro. No hay trámites de personas que no estén en <code>personas</code>, ni personas sin trámites. <code>muestra = Inf</code> deja explícito que se comparan todos los valores.</p>
 </div>
 <div id="una-dependencia-dentro-de-una-tabla" class="section level2">
 <h2>Una dependencia dentro de una tabla</h2>
-<p>En <code>personas</code>, cada ciudad observada pertenece a un solo departamento: conocer la ciudad determina el departamento. Al revés no vale, porque Salto y Belén comparten departamento. Bajamos el mínimo de observaciones a cuatro porque la tabla tiene ocho filas:</p>
+<p>En <code>personas</code>, cada ciudad observada pertenece a un solo departamento: conocer la ciudad determina el departamento. Al revés no vale, porque Salto y Belén comparten departamento. Bajamos el mínimo de observaciones a 4 porque la tabla tiene 8 filas:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true"></a>dependencias &lt;-<span class="st"> </span><span class="kw">detectar_dependencias</span>(</span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true"></a>  personas[<span class="kw">c</span>(<span class="st">&quot;ciudad&quot;</span>, <span class="st">&quot;departamento&quot;</span>)],</span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true"></a>  <span class="dt">muestra =</span> <span class="ot">Inf</span>,</span>
@@ -448,23 +448,29 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb4-8"><a href="#cb4-8" aria-hidden="true"></a><span class="co">#&gt; 1       ciudad departamento            1           8        4             0   TRUE</span></span>
 <span id="cb4-9"><a href="#cb4-9" aria-hidden="true"></a><span class="co">#&gt;   evidencia</span></span>
 <span id="cb4-10"><a href="#cb4-10" aria-hidden="true"></a><span class="co">#&gt; 1</span></span></code></pre></div>
-<p><code>perfilar()</code> busca las mismas dependencias por su cuenta (<code>analizar_dependencias = TRUE</code>, el valor por omisión) y las deja en <code>perfil$dependencias</code>. Una dependencia exacta es además lo que permite imputar un valor faltante desde los propios datos, como se ve en <a href="limpiar-con-un-plan.html">6. Limpiar con un plan</a>.</p>
+<p><code>perfilar()</code> busca las mismas dependencias por su cuenta (<code>analizar_dependencias = TRUE</code>, el valor por omisión) y las deja en <code>perfil$dependencias</code>. Una dependencia exacta permite además imputar un valor faltante desde los propios datos, como se ve en <a href="limpiar-con-un-plan.html">6. Limpiar con un plan</a>.</p>
 </div>
 <div id="lo-que-se-cumple-no-es-una-regla" class="section level2">
-<h2>Lo que se cumple no es una regla</h2>
-<p>Nada de esto modifica los datos ni declara el modelo. La clave es <em>candidata</em>, la cardinalidad describe estas dos tablas y la dependencia se cumple en estas ocho filas. Una entrega futura puede contradecirlas; la documentación del sistema es la que puede confirmarlas como reglas.</p>
+<h2>⚠️ Lo que se cumple no es una regla</h2>
+<p>Nada de esto modifica los datos ni declara el modelo:</p>
+<ul>
+<li>la clave es <em>candidata</em>;</li>
+<li>la cardinalidad describe estas 2 tablas;</li>
+<li>la dependencia se cumple en estas 8 filas.</li>
+</ul>
+<p>Una entrega futura puede contradecirlas. La documentación del sistema es la que puede confirmarlas como reglas.</p>
 </div>
 <div id="resumen" class="section level2">
 <h2>Resumen</h2>
 <ul>
 <li><code>detectar_claves()</code> encuentra las columnas que identifican cada fila en esta entrega: son candidatas, no claves.</li>
-<li><code>detectar_relaciones()</code> compara dos columnas de identificación y publica la cardinalidad y la cobertura de cada lado.</li>
+<li><code>detectar_relaciones()</code> compara 2 columnas de identificación y publica la cardinalidad y la cobertura de cada lado.</li>
 <li><code>detectar_dependencias()</code> encuentra columnas que determinan a otras; <code>perfilar()</code> las busca por su cuenta.</li>
 <li>Lo que los datos cumplen hoy lo confirma la documentación del sistema, no el paquete.</li>
 </ul>
 </div>
 <div id="paso-siguiente" class="section level2">
-<h2>Paso siguiente</h2>
+<h2>🧭 Paso siguiente</h2>
 <p><a href="vacio-por-diseno.html">5. El vacío por diseño</a> (<code>vignette(&quot;vacio-por-diseno&quot;)</code>): por qué una celda vacía puede ser correcta, y cómo se le dice al paquete.</p>
 </div>
 

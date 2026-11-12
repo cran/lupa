@@ -22,7 +22,7 @@ testthat::skip_on_cran()
   llamadas$sql <- NA_character_
   resultado <- testthat::with_mocked_bindings(
     lupa:::.clave_primaria_dbi(conexion, "tabla", esquema = "esquema"),
-    .consultar_dbi = function(conexion, sql, presupuesto) {
+    .consultar_dbi = function(conexion, sql, presupuesto, ...) {
       llamadas$n <- llamadas$n + 1L
       llamadas$sql <- sql
       list(ok = ok, datos = datos, motivo = motivo)
@@ -39,7 +39,7 @@ test_that("un catalogo vacio no se presenta como clave no declarada", {
   expect_identical(resultado$columnas, character())
   expect_identical(resultado$garantia, "desconocida")
   expect_true(is.na(resultado$estado$visible))
-  expect_match(resultado$motivo, "no devolvio filas")
+  expect_match(resultado$motivo, "no devolvi\u00f3 filas")
   expect_match(resultado$motivo, "no ser visible")
 })
 

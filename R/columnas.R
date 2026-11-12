@@ -192,6 +192,45 @@
   .resumen_longitudes_bloques(x)
 }
 
+# Un entero escrito sin nada mas, partido como lo compara el paquete: sus cifras
+# sin `+` ni ceros a la izquierda, si es negativo, y el texto que lo identifica,
+# el de `.texto_identidad()` y de `integer64`. "-0" es el cero: no es negativo,
+# y el extremo que lo tiene es "0". Contado como negativo, la columna
+# `c("-0", "5", "9007199254740993")` publicaba `minimo_exacto = "-0"` y
+# `n_negativos = 1`.
+.partes_entero_texto <- function(texto) {
+  sin_mas <- sub("^\\+", "", texto)
+  digitos <- sub("^0+(?=[0-9])", "", sub("^-", "", sin_mas), perl = TRUE)
+  negativos <- startsWith(sin_mas, "-") & digitos != "0"
+  identidad <- digitos
+  identidad[negativos] <- paste0("-", digitos[negativos])
+  list(digitos = digitos, negativos = negativos, identidad = identidad)
+}
+
+# Un texto numerico que identifica un centinela declarado conserva ese valor y
+# no el doble que resulte de leerlo. `R_strtod()` acumula las cifras en
+# `long double`, y donde ese tipo es un doble -macOS sobre arm64- un entero de
+# mas de 2^53 llega a otro doble: "1152921504606846976", que es 2^60, se leia
+# 2^60 - 128. La identidad comun tambien cubre las formas regionales y la
+# escritura corta de fracciones.
+.centinelas_enteros_por_texto <- function(texto, valores,
+                                          sentinelas_numericos,
+                                          convencion = NULL,
+                                          identidades = NULL) {
+  if (!length(sentinelas_numericos) || length(texto) != length(valores)) {
+    return(valores)
+  }
+  posicion <- identidades
+  if (is.null(posicion)) {
+    posicion <- .identidades_sentinelas_texto(
+      texto, sentinelas_numericos, convencion, valores_leidos = valores
+    )
+  }
+  cuales <- !is.na(posicion)
+  valores[cuales] <- as.double(sentinelas_numericos[posicion[cuales]])
+  valores
+}
+
 # Un entero escrito como TEXTO por encima de 2^53 no sobrevive al doble, y el
 # resumen publicaba el redondeo como si fuera el dato: sobre la columna
 # `c("9007199254740993", "9007199254740994", "9007199254740995")` -tres impares-
@@ -203,17 +242,37 @@
 #
 # Las comparaciones se hacen por longitud y con `method = "radix"`: comparar
 # decimales con `<` depende del locale, y este paquete ya se quemo con eso.
-.extremos_enteros_texto_fuera_de_precision <- function(texto, tipo) {
+#
+# Los centinelas declarados salen antes de todo, con la regla de la rama
+# numerica y de `integer64`: no entran en los extremos, los conteos ni la
+# mediana, y se cuentan como excluidos. Se reconocen por el texto que
+# identifica al numero (`.texto_identidad()`, la comparacion de `integer64`).
+# Esta rama no los sacaba: con `-999` declarado publicaba `minimo_exacto =
+# "-999"` y `n_negativos = 1`, mientras `integer64` con los mismos valores
+# publicaba el menor de los otros. Si sin ellos ningun valor pasa de 2^53, la
+# columna es la de un resumen comun y se devuelve `NULL`.
+.extremos_enteros_texto_fuera_de_precision <- function(texto, tipo,
+                                                       sentinelas_numericos =
+                                                         numeric()) {
   if (!identical(as.character(tipo)[1L], "entero")) return(NULL)
   presentes <- texto[!is.na(texto) & nzchar(texto)]
   if (!length(presentes)) return(NULL)
   # Solo enteros escritos sin nada mas: si la columna trae decimales, notacion
   # cientifica o separadores, no es este caso y no se toca.
   if (!all(grepl("^[+-]?[0-9]+$", presentes))) return(NULL)
-  sin_mas <- sub("^\\+", "", presentes)
-  negativos <- startsWith(sin_mas, "-")
-  digitos <- sub("^-", "", sin_mas)
-  digitos <- sub("^0+(?=[0-9])", "", digitos, perl = TRUE)
+  partes <- .partes_entero_texto(presentes)
+  negativos <- partes$negativos
+  digitos <- partes$digitos
+  n_sentinelas <- 0L
+  if (length(sentinelas_numericos)) {
+    centinela <- !is.na(.identidades_sentinelas_texto(
+      presentes, sentinelas_numericos
+    ))
+    n_sentinelas <- as.integer(sum(centinela))
+    negativos <- negativos[!centinela]
+    digitos <- digitos[!centinela]
+    if (!length(digitos)) return(NULL)
+  }
   limite <- "9007199254740991"
   largo <- nchar(digitos)
   excede <- any(largo > nchar(limite))
@@ -244,16 +303,33 @@
   } else {
     menor_magnitud(positivos)
   }
+  # Las centrales por valor, con el mismo orden: los negativos de mayor a menor
+  # magnitud y despues los demas de menor a mayor. La mediana la decide
+  # `.mediana_centrales_exactas()`, como la de un `integer64`. Un "-0" ya es el
+  # cero y va con los demas.
+  debajo <- digitos[negativos]
+  encima <- digitos[!negativos]
+  # `paste0("-", character())` da "-": sin negativos no se pega nada.
+  ordenados <- c(
+    if (length(debajo)) paste0("-", debajo[.orden_por_bytes(
+      nchar(debajo), debajo, method = "radix", decreasing = TRUE
+    )]),
+    encima[.orden_por_bytes(nchar(encima), encima, method = "radix")]
+  )
+  n <- length(ordenados)
   list(
     minimo_exacto = minimo, maximo_exacto = maximo,
     n_ceros = as.integer(sum(digitos == "0")),
-    n_negativos = as.integer(sum(negativos))
+    n_negativos = as.integer(sum(negativos)),
+    centrales = ordenados[unique(c((n + 1L) %/% 2L, (n + 2L) %/% 2L))],
+    n_sentinelas = n_sentinelas
   )
 }
 
 .valores_cuantitativos <- function(x, inferencia, formatos,
                                    meses_texto = NULL, vocabulario = NULL,
-                                   valores_preparados = NULL) {
+                                   valores_preparados = NULL,
+                                   sentinelas_numericos = numeric()) {
   if (inherits(x, "POSIXt")) {
     return(list(valores = as.numeric(x), clase = "fecha-hora",
                 n_fechas_resumidas = sum(is.finite(x)),
@@ -311,6 +387,20 @@
       valores <- .leer_numeros_texto(
         texto, inferencia[["convencion_numero_texto"]]
       )
+      identidades_sentinelas <- .identidades_sentinelas_texto(
+        texto, sentinelas_numericos,
+        inferencia[["convencion_numero_texto"]], valores_leidos = valores
+      )
+      valores <- .centinelas_enteros_por_texto(
+        texto, valores, sentinelas_numericos,
+        inferencia[["convencion_numero_texto"]], identidades_sentinelas
+      )
+      mascara_sentinelas_texto <- !is.na(identidades_sentinelas)
+      if (any(mascara_sentinelas_texto)) {
+        valores[mascara_sentinelas_texto] <- as.double(
+          sentinelas_numericos[identidades_sentinelas[mascara_sentinelas_texto]]
+        )
+      }
       # Los textos presentes que no llegan a numero no son NA de origen y no
       # pueden desaparecer sin dejar alcance.
       #
@@ -341,9 +431,10 @@
                   n_fechas_resumidas = NA_integer_,
                   n_fechas_excluidas_granularidad = NA_integer_,
                   n_valores_excluidos_resumen = n_excluidas,
+                  mascara_sentinelas_texto = mascara_sentinelas_texto,
                   fuera_de_precision =
                     .extremos_enteros_texto_fuera_de_precision(
-                      texto, inferencia$tipo
+                      texto, inferencia$tipo, sentinelas_numericos
                     ),
                   estado = if (n_excluidas > 0L) {
                     "calculados_sobre_valores"
@@ -558,8 +649,8 @@
       vacio$moda_sobresale <- NA
       vacio$no_evaluada <- TRUE
       vacio$motivo_no_evaluada <- paste(
-        "No se evaluo la secuencia entera: hay valores por encima de 2^53, que",
-        "en un doble se redondean, y no se mide una densidad sobre numeros",
+        "No se evalu\u00f3 la secuencia entera: hay valores por encima de 2^53, que",
+        "en un doble se redondean, y no se mide una densidad sobre n\u00fameros",
         "redondeados."
       )
       return(vacio)
@@ -1068,6 +1159,14 @@
 # Solo actua sobre un resumen numerico calculado: una columna de texto o de
 # fechas declarada como codigo no tiene esas cifras y no cambia.
 .resumen_codigo_declarado <- function(cuantitativo) {
+  # Un entero que pasa de 2^53 no publica media ni desvio, pero si la mediana
+  # cuando sus centrales caben en un doble (`.mediana_centrales_exactas()`). La
+  # de un codigo no es un dato: se saca, y el estado sigue diciendo la
+  # precision, que es lo que retuvo el resto.
+  if (identical(cuantitativo$estado_resumen_cuantitativo, "omitidos_precision")) {
+    cuantitativo$mediana <- NA_real_
+    return(cuantitativo)
+  }
   numerico <- cuantitativo$estado_resumen_cuantitativo %in%
     c("calculados", "calculados_sobre_valores") &&
     is.na(cuantitativo$minimo_fecha) && is.na(cuantitativo$maximo_fecha)
@@ -1087,6 +1186,47 @@
   )
   cuantitativo$estado_resumen_cuantitativo <- "omitidos_codigo"
   cuantitativo
+}
+
+# La mediana de enteros que se tienen exactos -un `integer64`, o enteros
+# escritos como texto- en una columna con algun valor que el doble no
+# representa. Es la regla de `perfilar_dbi()` (`.causa_mediana_inexacta_dbi()`)
+# con las centrales a la vista: la mediana depende solo de ellas, y se publica si
+# cada una cabe exacta en un doble -valor absoluto menor que 2^53-. Entonces es
+# la de `median()` sobre esos dobles, la misma que da una columna que no pasa de
+# 2^53 con esas centrales. Si alguna no cabe, `NA`: su doble ya no es el valor.
+# La columna entera se negaba, y la mediana de `{1, 2, 2^63 - 1}` es 2.
+#
+# Una regla en un solo lugar: la usan `perfilar()` -y con el `perfil_muestra` y
+# el spool de `muestra_motor`, que perfilan lo leido-, para `integer64` y para el
+# texto, y la via por bloques sobre el mapa de distintos.
+.mediana_centrales_exactas <- function(centrales) {
+  if (!length(centrales) || length(centrales) > 2L) return(NA_real_)
+  if (inherits(centrales, "integer64")) {
+    if (!.bit64_disponible()) return(NA_real_)
+    exactas <- as.logical(.integer64_exacto_en_doble(centrales))
+    if (!isTRUE(all(exactas))) return(NA_real_)
+    return(stats::median(as.numeric(centrales)))
+  }
+  # Texto de un entero: el doble que lee R es el valor si este queda por debajo
+  # de 2^53 en valor absoluto, y desde ahi el redondeo es monotono -nunca cae
+  # por debajo de 2^53-, asi que el mismo umbral sobre lo leido decide.
+  dobles <- suppressWarnings(as.numeric(as.character(centrales)))
+  if (!all(is.finite(dobles) & abs(dobles) < .MAX_ENTERO_EXACTO_DBI)) {
+    return(NA_real_)
+  }
+  stats::median(dobles)
+}
+
+# Las una o dos centrales de un `integer64` sin `NA`, en su clase: las
+# posiciones `(n + 1) %/% 2` y `(n + 2) %/% 2` del orden por valor, que son las
+# que promedia `median()`. `.sort_por_bytes()` ordena un `integer64` por su
+# rango, no por sus bits.
+.centrales_enteros_exactos <- function(valores) {
+  n <- length(valores)
+  if (!n) return(valores)
+  ordenados <- .sort_por_bytes(valores)
+  ordenados[unique(c((n + 1L) %/% 2L, (n + 2L) %/% 2L))]
 }
 
 .resumen_integer64 <- function(x, sentinelas_numericos = NULL) {
@@ -1137,6 +1277,10 @@
     vacio$maximo_exacto <- maximo_exacto
     vacio$n_ceros <- as.integer(sum(valores == bit64::as.integer64(0)))
     vacio$n_negativos <- as.integer(sum(valores < bit64::as.integer64(0)))
+    # La mediana no depende de toda la columna sino de sus centrales.
+    vacio$mediana <- .mediana_centrales_exactas(
+      .centrales_enteros_exactos(valores)
+    )
     vacio$estado_resumen_cuantitativo <- "omitidos_precision"
     return(vacio)
   }
@@ -1176,12 +1320,13 @@
                                   sentinelas_numericos = NULL,
                                   vocabulario = NULL,
                                   valores_preparados = NULL) {
-  cuantitativos <- .valores_cuantitativos(
-    x, inferencia, formatos, meses_texto = meses_texto,
-    vocabulario = vocabulario, valores_preparados = valores_preparados
-  )
   sentinelas_declarados <- .sentinelas_numericos_declarados(
     sentinelas_numericos
+  )
+  cuantitativos <- .valores_cuantitativos(
+    x, inferencia, formatos, meses_texto = meses_texto,
+    vocabulario = vocabulario, valores_preparados = valores_preparados,
+    sentinelas_numericos = sentinelas_declarados
   )
   if (identical(cuantitativos$clase, "fecha_granularidad_incompleta")) {
     salida <- .resumen_vacio_cuantitativo("granularidad_incompleta")
@@ -1208,13 +1353,18 @@
     salida$maximo_exacto <- fuera$maximo_exacto
     salida$n_ceros <- fuera$n_ceros
     salida$n_negativos <- fuera$n_negativos
+    # La mediana, por sus centrales, como en `integer64`. Los centinelas
+    # declarados ya salieron (`.extremos_enteros_texto_fuera_de_precision()`):
+    # los extremos, los conteos y la mediana son los de los mismos valores que
+    # en las otras ramas, y los excluidos se cuentan.
+    salida$mediana <- .mediana_centrales_exactas(fuera$centrales)
     salida$n_valores_excluidos_resumen <- as.integer(
       if (is.null(cuantitativos$n_valores_excluidos_resumen)) {
         0L
       } else {
         cuantitativos$n_valores_excluidos_resumen
       }
-    )
+    ) + as.integer(fuera$n_sentinelas %||% 0L)
     return(salida)
   }
   valores_originales <- cuantitativos$valores
@@ -1236,7 +1386,9 @@
   # declara los cinco en `n_presentes_fuera_de_aplicabilidad`. No es una
   # contradiccion, y un estado como `sin_valores_utilizables` seria lo falso.
   n_presentes_resumen <- as.integer(sum(!is.na(valores_originales)))
-  mascara_sentinelas <- if (identical(cuantitativos$clase, "numero")) {
+  mascara_sentinelas <- if (!is.null(cuantitativos$mascara_sentinelas_texto)) {
+    cuantitativos$mascara_sentinelas_texto
+  } else if (identical(cuantitativos$clase, "numero")) {
     .mascara_sentinelas_resumen(
       valores_originales, sentinelas_declarados
     )
@@ -1341,10 +1493,16 @@
     return(vacio)
   }
 
+  valores_basicos <- if (!is.null(cuantitativos$mascara_sentinelas_texto)) {
+    valores_originales[!mascara_sentinelas]
+  } else {
+    valores_originales
+  }
   basicos <- .resumen_cuantitativo_bloques(
-    valores_originales,
+    valores_basicos,
     contar_signos = identical(cuantitativos$clase, "numero"),
-    excluir = if (identical(cuantitativos$clase, "numero")) {
+    excluir = if (is.null(cuantitativos$mascara_sentinelas_texto) &&
+                 identical(cuantitativos$clase, "numero")) {
       sentinelas_declarados
     } else {
       numeric()
@@ -1386,8 +1544,8 @@
     estado_outliers <- "no_evaluado"
     motivo_outliers <- paste(
       "No se evaluaron los l\u00edmites de Tukey porque el recorrido",
-      "intercuartilico es cero; no hay una distancia distributiva que medir.",
-      "Reunir valores con variacion o declarar otro criterio antes de",
+      "intercuart\u00edlico es cero; no hay una distancia distributiva que medir.",
+      "Reunir valores con variaci\u00f3n o declarar otro criterio antes de",
       "interpretar outliers."
     )
   } else {
@@ -1511,25 +1669,35 @@
   partes
 }
 
-.analizar_codificacion_vocabulario <- function(textos, valores = NULL) {
+.analizar_codificacion_vocabulario <- function(textos, valores = NULL,
+                                              max_iteraciones = 20L,
+                                              con_cache = FALSE) {
   if (!is.null(valores) && length(textos) > 1L &&
       length(valores) / length(textos) > .umbral_vocabulario_codificacion) {
-    return(.analizar_codificacion(textos))
+    return(.analizar_codificacion(
+      textos, max_iteraciones = max_iteraciones
+    ))
   }
   vocabulario <- .vocabulario_texto(
     textos, .umbral_vocabulario_codificacion, valores = valores
   )
   if (!isTRUE(vocabulario$usar)) {
-    return(.analizar_codificacion(textos))
+    return(.analizar_codificacion(
+      textos, max_iteraciones = max_iteraciones
+    ))
   }
-  unico <- .analizar_codificacion(vocabulario$valores)
+  unico <- .analizar_codificacion(
+    vocabulario$valores, max_iteraciones = max_iteraciones
+  )
   reparados <- rep(NA_character_, length(textos))
   estados <- rep(NA_character_, length(textos))
   pasos <- vector("list", length(textos))
+  consumidas <- vector("list", length(textos))
   presentes <- !is.na(vocabulario$indices)
   reparados[presentes] <- unico$reparados[vocabulario$indices[presentes]]
   estados[presentes] <- unico$estados[vocabulario$indices[presentes]]
   pasos[presentes] <- unico$pasos[vocabulario$indices[presentes]]
+  consumidas[presentes] <- unico$consumidas[vocabulario$indices[presentes]]
   reparables <- !is.na(reparados) & !is.na(textos) &
     reparados != textos & estados == "reparado"
   parciales <- !is.na(reparados) & !is.na(textos) &
@@ -1543,18 +1711,34 @@
       paste0(origen, " -> ", .comillas_sin_locale(reparados[[i]], quote = '"'),
              " [", estados[[i]], "]")
     } else {
-      paste0(origen, " (contiene un caracter de reemplazo irrecuperable)")
+      paste0(origen, " (contiene un car\u00e1cter de reemplazo irrecuperable)")
     }
   }, character(1L)), collapse = "; ")
-  list(
+  candidatos_expandidos <- rep(FALSE, length(textos))
+  candidatos_expandidos[presentes] <-
+    unico$candidatos[vocabulario$indices[presentes]]
+  salida <- list(
     n = sum(afectados), n_reparables = sum(reparables),
     n_reparables_parcialmente = sum(parciales),
     n_irreparables = sum(irreparables),
     n_no_se_pudo = sum(estados == "no_se_pudo", na.rm = TRUE),
     evidencia = evidencia, reparados = reparados, estados = estados,
     pasos = pasos, afectados = afectados,
+    candidatos = candidatos_expandidos, valores = as.character(textos),
+    consumidas = consumidas,
     estado = .ftfy_estado_agregado(estados)
   )
+  if (isTRUE(con_cache)) {
+    # Estos campos conservan la salida sin expandir para que la mascara de
+    # invisibles la alinee con el mismo vocabulario sin volver a reparar. El
+    # resto del resultado sigue alineado a `textos` para los conteos publicados.
+    salida$valores <- vocabulario$valores
+    salida$candidatos_valores <- unico$candidatos
+    salida$reparados_valores <- unico$reparados
+    salida$estados_valores <- unico$estados
+    salida$consumidas_valores <- unico$consumidas
+  }
+  salida
 }
 
 # El texto de una celda en la forma con que se lo lee como numero: declarado
@@ -1562,7 +1746,7 @@
 # numero en ninguna sesion- y recortado. La comparten la descomposicion del
 # numero regional y la conversion de tipo de `aplicar()`.
 .texto_legible_recortado <- function(x) {
-  texto <- .declarar_utf8_valido(as.character(x))
+  texto <- .texto_para_operar(as.character(x))
   invalidos <- !is.na(texto) & Encoding(texto) != "latin1" & !validUTF8(texto)
   texto[invalidos] <- NA_character_
   trimws(texto)
@@ -1697,12 +1881,27 @@
 #   fecha que dos formatos leen distinto.
 # - sin separadores, o sin convencion evaluada: la lectura de siempre.
 #
+# Y en todas, dos reglas que valen para cualquier convencion:
+#
+# - un valor cuyo primer grupo de miles empieza con cero -`099.123.456`, o
+#   `0.500` con coma decimal- no es un importe en ninguna: es un telefono o un
+#   codigo, y quitarle los separadores lo volvia `99123456`;
+# - solo se lee la FORMA que la inferencia cuenta como numero
+#   (`.formas_numero_texto()`): el resumen recorre la columna entera y la
+#   inferencia puede haber mirado una muestra, y `as.numeric()` lee mas de lo
+#   que la inferencia valido -`0x1A` es 26, `5.` es 5-. Lo que entraba asi al
+#   maximo y a la media lo hacia sin declararse.
+#
 # Lo que queda afuera vuelve `NA`, y quien llama lo cuenta y lo declara
 # (`n_valores_excluidos_resumen`), como cualquier texto que no llega a numero.
-.leer_numeros_texto <- function(texto, convencion = NULL) {
+# `NaN` e `Inf` escritos siguen siendo `NaN` e `Inf`: el resumen los cuenta en
+# sus propios campos y no en el maximo.
+.normalizar_numeros_texto <- function(texto, convencion = NULL) {
   texto <- trimws(as.character(texto))
   con_separador <- !is.na(texto) & grepl("[.,]", texto, perl = TRUE)
-  if (!any(con_separador)) return(suppressWarnings(as.numeric(texto)))
+  if (!any(con_separador)) {
+    return(texto)
+  }
   if (is.null(convencion)) {
     convencion <- .analizar_numeros_texto(texto)$convencion
   }
@@ -1714,12 +1913,8 @@
   if (convencion %in% c("decimal_coma", "decimal_punto")) {
     coma <- identical(convencion, "decimal_coma")
     miles <- if (coma) "." else ","
-    agrupado <- if (coma) {
-      "^[+-]?[0-9]{1,3}(?:\\.[0-9]{3})+(?:,[0-9]+)?$"
-    } else {
-      "^[+-]?[0-9]{1,3}(?:,[0-9]{3})+(?:\\.[0-9]+)?$"
-    }
-    con_miles <- con_separador & grepl(miles, texto, fixed = TRUE)
+    agrupado <- if (coma) .patron_miles_coma else .patron_miles_punto
+    con_miles <- con_separador & grepl(miles, texto, fixed = TRUE, useBytes = TRUE)
     sin_lectura <- con_miles & !grepl(agrupado, texto, perl = TRUE)
     normalizado[sin_lectura] <- NA_character_
     normalizado <- .normalizar_separadores_numero(normalizado, convencion)
@@ -1729,6 +1924,16 @@
     propia[partes$evidencia_coma & !partes$evidencia_punto] <- "decimal_coma"
     propia[partes$evidencia_punto & !partes$evidencia_coma] <- "decimal_punto"
     leidos <- texto[con_separador]
+    # La misma regla que con la convencion de la columna, con la del valor:
+    # los miles agrupan de a tres y sin cero adelante. `099.123,45` trae la
+    # coma y su primer grupo empieza con cero; `1.23,5` no agrupa.
+    cero <- (propia %in% "decimal_coma" &
+               grepl(".", leidos, fixed = TRUE, useBytes = TRUE) &
+               !grepl(.patron_miles_coma, leidos, perl = TRUE)) |
+      (propia %in% "decimal_punto" &
+         grepl(",", leidos, fixed = TRUE, useBytes = TRUE) &
+         !grepl(.patron_miles_punto, leidos, perl = TRUE))
+    propia[cero] <- NA_character_
     for (lectura in c("decimal_coma", "decimal_punto")) {
       cuales <- !is.na(propia) & propia == lectura
       leidos[cuales] <- .normalizar_separadores_numero(leidos[cuales], lectura)
@@ -1738,7 +1943,42 @@
   } else {
     normalizado <- sub(",", ".", texto, fixed = TRUE)
   }
-  suppressWarnings(as.numeric(normalizado))
+  normalizado
+}
+
+.leer_numeros_texto <- function(texto, convencion = NULL) {
+  texto <- trimws(as.character(texto))
+  normalizado <- .normalizar_numeros_texto(texto, convencion)
+  .solo_formas_numero(suppressWarnings(as.numeric(normalizado)), texto)
+}
+
+# Los miles agrupados de a tres, con el primer grupo sin cero adelante, y la
+# parte decimal con el otro separador. Los comparten la inferencia y el lector.
+.patron_miles_coma <- "^[+-]?[1-9][0-9]{0,2}(?:\\.[0-9]{3})+(?:,[0-9]+)?$"
+.patron_miles_punto <- "^[+-]?[1-9][0-9]{0,2}(?:,[0-9]{3})+(?:\\.[0-9]+)?$"
+
+# Las formas que la inferencia cuenta como numero, antes de la convencion: un
+# solo separador con su exponente (`1234,56`, `1.5e3`, `.5`), o los miles
+# agrupados de a tres sin cero adelante (`1.234,56`, `1,234.56`, `1.234.567`).
+# Que una forma este aca no dice que se lea: la convencion decide. Dice que lo
+# que no esta no se lee nunca.
+.formas_numero_texto <- function(texto) {
+  !is.na(texto) & (
+    grepl("^[+-]?(?:[0-9]+(?:[.,][0-9]+)?|[.,][0-9]+)(?:[eE][+-]?[0-9]+)?$",
+          texto, perl = TRUE) |
+      grepl(.patron_miles_coma, texto, perl = TRUE) |
+      grepl(.patron_miles_punto, texto, perl = TRUE)
+  )
+}
+
+.solo_formas_numero <- function(valores, texto) {
+  leidos <- is.finite(valores)
+  if (any(leidos)) {
+    fuera <- leidos
+    fuera[leidos] <- !.formas_numero_texto(texto[leidos])
+    valores[fuera] <- NA_real_
+  }
+  valores
 }
 
 .frecuencias_unidades_numero <- function(partes, presentes) {
@@ -2100,7 +2340,7 @@
   codigos %in% .codigos_control_invisible_set
 }
 
-.predicados_invisibles <- function(textos) {
+.predicados_invisibles <- function(textos, codificacion = NULL) {
   n <- length(textos)
   salida <- list(
     control = rep(FALSE, n), eliminable = rep(FALSE, n),
@@ -2116,17 +2356,70 @@
   ))) {
     return(salida)
   }
+  consumidos_por_celda <- .ftfy_posiciones_consumidas_vector(
+    textos, codificacion = codificacion
+  )
   for (i in seq_len(n)) {
     texto <- textos[[i]]
     if (is.na(texto)) next
     # .texto_analizable() sanea los bytes UTF-8 inválidos antes de llegar
     # aquí; por eso esta única pasada no necesita un tryCatch por predicado.
     codigos <- utf8ToInt(texto)
-    salida$control[[i]] <- any(codigos %in% .codigos_control_invisible_set)
-    salida$eliminable[[i]] <- any(codigos %in% .codigos_control_eliminable_set)
-    salida$espacio[[i]] <- any(codigos %in% .codigos_espacios_invisibles)
-    salida$significativo[[i]] <- any(codigos %in% .codigos_invisibles_significativos)
-    salida$separador[[i]] <- any(codigos %in% .codigos_salto_linea_set)
+    consumidos <- consumidos_por_celda[[i]]
+    if (is.null(consumidos) || length(consumidos) != length(codigos)) {
+      consumidos <- rep(FALSE, length(codigos))
+    }
+    no_ascii <- codigos > 0x7fL
+    solo_c1 <- any(codigos %in% 0x80L:0x9fL) &&
+      all(codigos[no_ascii] %in% 0x80L:0x9fL) &&
+      identical(.ftfy_reparar_uno(texto)$estado, "no_se_pudo")
+    salida$control[[i]] <- any(
+      .codigos_control_invisible(codigos) & (!consumidos | solo_c1)
+    )
+    proteccion <- list(
+      candidatos = .ftfy_mascara_candidatos(texto),
+      mascaras = list(consumidos)
+    )
+    candidato_inicial <- proteccion$candidatos
+    texto_desde_codigos <- function(valores) {
+      paste0(intToUtf8(valores, multiple = TRUE), collapse = "")
+    }
+    decidir_accion <- function(afectados, transformar, valores_nuevos) {
+      if (!any(afectados)) return(FALSE)
+      candidato_nuevo <- .ftfy_mascara_candidatos(
+        texto_desde_codigos(valores_nuevos)
+      )
+      if (!isTRUE(candidato_inicial) && !isTRUE(candidato_nuevo)) {
+        return(TRUE)
+      }
+      transformar(texto, proteccion)$n > 0L
+    }
+    eliminable <- .codigos_control_eliminable(codigos) & !consumidos
+    if (any(eliminable)) {
+      salida$eliminable[[i]] <- decidir_accion(
+        eliminable, .quitar_controles_invisibles,
+        codigos[!.codigos_control_eliminable(codigos) | consumidos]
+      )
+    }
+    espacios <- codigos %in% .codigos_espacios_invisibles & !consumidos
+    if (any(espacios)) {
+      nuevos_espacios <- codigos
+      nuevos_espacios[espacios] <- 32L
+      salida$espacio[[i]] <- decidir_accion(
+        espacios, .normalizar_espacios_invisibles, nuevos_espacios
+      )
+    }
+    salida$significativo[[i]] <- any(
+      codigos %in% .codigos_invisibles_significativos & !consumidos
+    )
+    separador <- codigos %in% .codigos_salto_linea_set & !consumidos
+    if (any(separador)) {
+      nuevos_separadores <- codigos
+      nuevos_separadores[separador] <- 32L
+      salida$separador[[i]] <- decidir_accion(
+        separador, .reemplazar_separadores, nuevos_separadores
+      )
+    }
   }
   salida
 }
@@ -2168,6 +2461,8 @@
   patron <- .PATRON_ENTIDAD_HTML
   vapply(textos, function(texto) {
     if (is.na(texto)) return(FALSE)
+    texto <- .texto_para_operar(texto)
+    if (!validUTF8(texto)) return(FALSE)
     posiciones <- gregexpr(patron, texto, perl = TRUE)[[1L]]
     if (identical(posiciones[[1L]], -1L)) return(FALSE)
     encontrados <- regmatches(texto, list(posiciones))[[1L]]
@@ -2200,11 +2495,10 @@
   # podia saber que eran el mismo valor, que es exactamente lo que el hallazgo
   # le pide mirar antes de unificar.
   texto <- .texto_publicable(texto)
-  # `latin1` NO es `bytes`: ahi R conoce la codificacion y `enc2utf8()` la
-  # convierte sin perder nada. Va antes de mirar `validUTF8()`, porque los
-  # bytes de un texto latin1 no son UTF-8 validos y sin convertirlos primero
-  # se los tomaria por indescifrables.
-  if (Encoding(texto) == "latin1") texto <- enc2utf8(texto)
+  # `latin1` NO es `bytes`: se convierte antes de mirar `validUTF8()`, porque
+  # sus bytes no son UTF-8 validos. La conversion comun conserva tambien los
+  # cinco puntos C1 que no tienen nombre en Windows-1252.
+  texto <- .latin1_a_utf8(texto)
   # Y lo que aun no decodifica no se puede describir como caracteres. Antes se
   # intentaba igual: `utf8ToInt()` devuelve `NA` -no vacio, no error- y ese
   # `NA` llegaba al `if` de mas abajo y ABORTABA la corrida. Una columna
@@ -2239,6 +2533,10 @@
 .evidencia_texto_visible <- function(textos, mascara) {
   ejemplos <- utils::head(unique(textos[which(mascara)]), 6L)
   if (!length(ejemplos)) return("")
+  # La tabla de patrones rinde los valores declarados `bytes` antes de
+  # generalizarlos. La evidencia debe pasar por la misma vista; si se la
+  # interpreta como UTF-8 aqui, las dos superficies publican cadenas distintas.
+  ejemplos <- .texto_publicable(ejemplos)
   paste0(
     paste(vapply(ejemplos, .escapar_texto_visible, character(1L)), collapse = "; "),
     .nota_escapes(ejemplos)
@@ -2251,6 +2549,52 @@
 
 .bit64_disponible <- function() {
   requireNamespace("bit64", quietly = TRUE)
+}
+
+.texto_largo <- function(x, max_largo) {
+  vacio <- list(
+    mascara = NULL,
+    n_valores = 0L,
+    max_bytes = 0,
+    max_caracteres = 0
+  )
+  if (!(is.character(x) || is.factor(x)) || !length(x) ||
+      is.infinite(max_largo)) {
+    return(vacio)
+  }
+  textos <- suppressWarnings(as.character(x))
+  bytes <- suppressWarnings(nchar(textos, type = "bytes", allowNA = TRUE))
+  observados_bytes <- bytes[!is.na(bytes)]
+  maximo_bytes <- if (length(observados_bytes)) {
+    max(observados_bytes)
+  } else 0
+  hay_largo <- is.finite(maximo_bytes) && maximo_bytes > max_largo
+  if (!hay_largo) return(vacio)
+  caracteres <- .nchar_texto_seguro(textos)
+  mascara <- !is.na(textos) & bytes > max_largo
+  if (!is.null(caracteres)) {
+    mascara <- mascara | (!is.na(caracteres) & caracteres > max_largo)
+  }
+  vacio$mascara <- mascara
+  vacio$n_valores <- as.integer(sum(mascara))
+  observados_caracteres <- if (is.null(caracteres)) {
+    observados_bytes
+  } else caracteres[!is.na(caracteres)]
+  vacio$max_bytes <- if (length(observados_bytes)) {
+    max(observados_bytes)
+  } else 0
+  vacio$max_caracteres <- if (length(observados_caracteres)) {
+    max(observados_caracteres)
+  } else 0
+  vacio
+}
+
+.marca_texto_largo <- function(x, mascara) {
+  if (!(is.character(x) || is.factor(x))) return(x)
+  if (!any(mascara)) return(x)
+  salida <- if (is.factor(x)) as.character(x) else x
+  salida[mascara] <- "texto_largo_no_evaluado"
+  salida
 }
 
 .diagnosticar_texto <- function(x, vocabulario = NULL) {
@@ -2305,7 +2649,8 @@
   if (length(preparacion$posiciones)) {
     mostradas <- utils::head(preparacion$posiciones, 8L)
     vacio$evidencia_codificacion_invalida <- paste0(
-      length(preparacion$posiciones), " valores; filas: ",
+      length(preparacion$posiciones),
+      if (length(preparacion$posiciones) == 1L) " valor; fila: " else " valores; filas: ",
       paste(mostradas, collapse = ", "),
       if (length(preparacion$posiciones) > length(mostradas)) ", ..." else ""
     )
@@ -2335,17 +2680,24 @@
   } else {
     vocabulario
   }
+  codificacion <- .analizar_codificacion_vocabulario(
+    textos, valores = unicos, con_cache = TRUE
+  )
   if (length(textos) > 1L &&
       length(unicos) / length(textos) <= .umbral_vocabulario_barato) {
     vocabulario_barato <- .vocabulario_texto(
       textos, .umbral_vocabulario_barato, valores = unicos
     )
-    espacios_unicos <- vocabulario_barato$valores !=
-      trimws(vocabulario_barato$valores)
+    espacios_unicos <- .celdas_texto_protegidas(
+      unicos, "recortar_espacios"
+    )
     espacios <- validos &
       espacios_unicos[vocabulario_barato$indices]
   } else {
-    espacios <- validos & textos != trimws(textos)
+    espacios_unicos <- .celdas_texto_protegidas(
+      unicos, "recortar_espacios"
+    )
+    espacios <- validos & espacios_unicos[match(textos, unicos)]
   }
   # `unique()` sobre una cadena marcada `bytes` ABORTA en el minimo declarado -R
   # 4.1- con "translating strings with bytes encoding is not allowed", y estos
@@ -2404,15 +2756,9 @@
   vocabulario_predicados <- .vocabulario_texto(
     textos, .umbral_vocabulario_barato, valores = unicos
   )
-  mapear_predicado <- function(fn) {
-    evaluados <- fn(vocabulario_predicados$valores)
-    if (isTRUE(vocabulario_predicados$usar)) {
-      evaluados[vocabulario_predicados$indices]
-    } else {
-      evaluados
-    }
-  }
-  invisibles <- .predicados_invisibles(vocabulario_predicados$valores)
+  invisibles <- .predicados_invisibles(
+    vocabulario_predicados$valores, codificacion = codificacion
+  )
   mapear_resultado <- function(evaluados) {
     if (isTRUE(vocabulario_predicados$usar)) {
       evaluados[vocabulario_predicados$indices]
@@ -2425,8 +2771,15 @@
   espacios_invisibles <- mapear_resultado(invisibles$espacio)
   significativos <- mapear_resultado(invisibles$significativo)
   saltos <- mapear_resultado(invisibles$separador)
-  entidades <- mapear_predicado(.entidades_html_en_texto)
-  codificacion <- .analizar_codificacion_vocabulario(textos, valores = unicos)
+  entidades_unicas <- .celdas_texto_protegidas(
+    vocabulario_predicados$valores, "decodificar_entidades_html"
+  )
+  entidades <- mapear_resultado(entidades_unicas)
+  invisibles_cache <- list(
+    control = controles, eliminable = eliminables,
+    espacio = espacios_invisibles, significativo = significativos,
+    separador = saltos
+  )
 
   list(
     n_espacios_borde = sum(espacios),
@@ -2461,7 +2814,12 @@
     n_entidades_html = sum(entidades, na.rm = TRUE),
     evidencia_entidades_html = .evidencia_texto_visible(publicables, entidades),
     n_separadores_en_campo = sum(saltos, na.rm = TRUE),
-    evidencia_separadores_en_campo = .evidencia_texto_visible(publicables, saltos)
+    evidencia_separadores_en_campo = .evidencia_texto_visible(publicables, saltos),
+    # `.indices_hallazgo_columna()` se ejecuta despues, durante la construccion
+    # de hallazgos. Estas mascaras son el resultado de la misma pasada: volver a
+    # descubrirlas alli repetia el filtro y la alineacion sobre la columna.
+    cache_invisibles = invisibles_cache,
+    cache_codificacion_afectados = codificacion$afectados
   )
 }
 
@@ -2601,11 +2959,14 @@
                               sentinelas_numericos,
                               aplicable = NULL,
                               cadenas_ausencia = NULL,
-                              codigo = FALSE) {
+                              codigo = FALSE,
+                              max_largo_valor_vocabulario =
+                                .MAX_LARGO_VALOR_CASI_DUPLICADOS) {
   if (.es_columna_compuesta(x)) {
     return(.perfilar_columna_matriz(
       x, nombre, muestra, max_patrones, distinguir_mayusculas, expandir,
-      umbral_patron_raro, sentinelas_numericos
+      umbral_patron_raro, sentinelas_numericos,
+      max_largo_valor_vocabulario
     ))
   }
   # El universo aplicable se resuelve primero porque gobierna todos los conteos
@@ -2646,6 +3007,10 @@
   }
   preparacion_texto <- .texto_analizable(x)
   x_analisis <- preparacion_texto$valores
+  # Esta vista conserva los valores para los conteos y las lecturas baratas.
+  # El tope se calcula despues de aplicar el universo y solo modifica la vista
+  # de las operaciones textuales costosas.
+  x_analisis_diagnostico <- x_analisis
   # La columna tal cual, para lo que compara por igualdad en vez de leer texto.
   # Sobre una columna no analizable como texto, `valores` son ausentes
   # declarados: inferir el tipo ahi diria "desconocido" sobre una columna cuyo
@@ -2682,14 +3047,38 @@
       x_identidad[!aplicable] <- NA
     }
   }
+  texto_largo <- .texto_largo(
+    x_analisis, max_largo_valor_vocabulario
+  )
+  # La vista completa conserva los valores largos para identidad, conteos,
+  # inferencia y longitudes. Las operaciones textuales costosas reciben una
+  # vista aparte con esas filas enmascaradas mas abajo.
+  x_analisis_diagnostico <- x_analisis
+  x_texto_diagnostico <- if (is.character(x) || is.factor(x)) {
+    salida <- x
+    if (!all(aplicable)) salida[!aplicable] <- NA_character_
+    if (any(texto_largo$mascara)) {
+      salida[texto_largo$mascara] <- NA_character_
+    }
+    salida
+  } else {
+    .marca_texto_largo(x_analisis, texto_largo$mascara)
+  }
   # El perfilado conserva el resultado intermedio sólo durante esta llamada;
   # la función exportada `inferir_tipo()` nunca devuelve ese caché.
   inferencia <- .inferir_tipo_interno(
-    x_identidad, muestra = muestra, conservar_cache = TRUE
+    if (is.character(x_analisis_diagnostico) ||
+        is.factor(x_analisis_diagnostico)) {
+      x_analisis_diagnostico
+    } else {
+      x_identidad
+    }, muestra = muestra, conservar_cache = TRUE
   )
   formatos <- inferencia$formatos_fecha
   if (is.null(formatos)) {
-    formatos <- detectar_formatos_fecha(x_analisis, muestra = muestra)
+    formatos <- detectar_formatos_fecha(
+      x_analisis_diagnostico, muestra = muestra
+    )
   }
   # El tipo y su estado deben salir de la misma tabla de formatos. En texto,
   # esta es la tabla que ya uso `.inferir_tipo_interno` para calcular
@@ -2727,7 +3116,7 @@
     # pasar el original hace que `descubrir_patrones()` lo rechace: "`x` debe
     # ser un vector atomico". Lo atrapo la suite.
     descubrir_patrones(
-      if (is.character(x) || is.factor(x)) .texto_publicable(x) else x_analisis,
+      x_texto_diagnostico,
       distinguir_mayusculas = distinguir_mayusculas,
       expandir = expandir,
       max_patrones = max_patrones,
@@ -2736,7 +3125,7 @@
       proteger_datos_personales = FALSE
     )
   } else {
-    estructura <- data.frame(
+    estructura <- .data_frame_simple(
       patron = character(), n = integer(), proporcion = numeric(),
       ejemplos = character(), stringsAsFactors = FALSE
     )
@@ -2787,24 +3176,39 @@
     .clave_bytes(x_identidad)
   } else NULL
   n_distintos <- .n_distintos_columna(x_identidad, claves = claves_identidad)
-  valor_concentrado <- .estadisticos_valor_concentrado(x_identidad)
+  valor_concentrado <- .estadisticos_valor_concentrado(
+    x_identidad, sentinelas_declarados
+  )
   vocabulario_texto <- if (
-    (is.character(x_analisis) || is.factor(x_analisis)) &&
+    (is.character(x_analisis_diagnostico) ||
+       is.factor(x_analisis_diagnostico)) &&
       n > 1L && is.finite(n_distintos) &&
       n_distintos / n <= .umbral_vocabulario_codificacion
   ) {
-    unique(x_analisis[!is.na(x_analisis)])
+    unique(x_analisis_diagnostico[!is.na(x_analisis_diagnostico)])
   } else {
     NULL
   }
+  vocabulario_texto_caro <- if (
+    is.null(vocabulario_texto) || !any(texto_largo$mascara)
+  ) {
+    vocabulario_texto
+  } else {
+    unique(x_analisis_diagnostico[
+      !is.na(x_analisis_diagnostico) & !texto_largo$mascara
+    ])
+  }
   vocabulario_numeros <- if (
     is.null(vocabulario_texto) &&
-      (is.character(x_analisis) || is.factor(x_analisis))
-  ) x_analisis else vocabulario_texto
+      (is.character(x_analisis_diagnostico) ||
+         is.factor(x_analisis_diagnostico))
+  ) x_analisis_diagnostico else vocabulario_texto
   numeros_texto <- .analizar_numeros_texto(
-    x_analisis, vocabulario = vocabulario_numeros, n_distintos = n_distintos,
+    x_analisis_diagnostico, vocabulario = vocabulario_numeros,
+    n_distintos = n_distintos,
     directo = is.null(vocabulario_texto) &&
-      (is.character(x_analisis) || is.factor(x_analisis))
+      (is.character(x_analisis_diagnostico) ||
+         is.factor(x_analisis_diagnostico))
   )
   # La convencion decimal que la fila publica viaja con la inferencia a TODO lo
   # que lee la columna como numero -la secuencia entera, los faltantes
@@ -2813,7 +3217,7 @@
   # Ver `.leer_numeros_texto()`.
   inferencia$convencion_numero_texto <- numeros_texto$convencion
   secuencia_entera <- .resumen_secuencia_entera(
-    x_analisis, inferencia, formatos
+    x_analisis_diagnostico, inferencia, formatos
   )
   attr(patrones, "desvios_patron_raro") <-
     .desvios_patron_raro_detectados(
@@ -2821,22 +3225,24 @@
     )
   # La mascara se calcula en UNA funcion, que tambien usa `detectar_claves()`.
   faltantes_disfrazados <- .faltantes_disfrazados_columna(
-    x_analisis, inferencia, formatos, secuencia_entera, sentinelas_numericos,
+    x_analisis_diagnostico, inferencia, formatos, secuencia_entera,
+    sentinelas_numericos,
     sentinelas_declarados, cadenas_ausencia, aplicable
   )
   rol_propuesto <- .propuesta_escala(x, inferencia$tipo)$rol
   casi_clave <- .resumen_casi_clave(
-    x_analisis, rol = rol_propuesto, tipo_implicito = inferencia$tipo,
+    x_analisis_diagnostico, rol = rol_propuesto, tipo_implicito = inferencia$tipo,
     disfrazados = faltantes_disfrazados$mascara
   )
   vocabulario_fecha <- if (
-    (is.character(x_analisis) || is.factor(x_analisis)) &&
+    (is.character(x_analisis_diagnostico) ||
+       is.factor(x_analisis_diagnostico)) &&
       inferencia$tipo %in% c("fecha", "fecha-hora")
   ) {
-    textos_fecha <- trimws(x_analisis)
+    textos_fecha <- trimws(x_analisis_diagnostico)
     presentes_fecha <- !is.na(textos_fecha) & nzchar(textos_fecha)
-    valores_fecha <- if (is.null(vocabulario_texto)) NULL else {
-      unicos <- trimws(vocabulario_texto)
+    valores_fecha <- if (is.null(vocabulario_texto_caro)) NULL else {
+      unicos <- trimws(vocabulario_texto_caro)
       unique(unicos[!is.na(unicos) & nzchar(unicos)])
     }
     .vocabulario_texto(
@@ -2847,10 +3253,10 @@
   moda <- .moda_columna(x_identidad, claves = claves_identidad)
   longitudes <- .resumen_longitud(x_analisis)
   cuantitativo <- .resumen_cuantitativo(
-    x_analisis, inferencia, formatos, meses_texto = meses_texto,
+    x_analisis_diagnostico, inferencia, formatos, meses_texto = meses_texto,
     sentinelas_numericos = sentinelas_numericos,
     vocabulario = vocabulario_fecha,
-    valores_preparados = x_analisis
+    valores_preparados = x_analisis_diagnostico
   )
   # Declarada en `columnas_codigo`: ver `.resumen_codigo_declarado()`.
   if (isTRUE(codigo)) cuantitativo <- .resumen_codigo_declarado(cuantitativo)
@@ -2862,7 +3268,9 @@
   # y el paquete disparaba su propia alarma -"cuenta 6 y traza 4"-. Se marca
   # como ausente en vez de recortar, por el mismo motivo que arriba: para que
   # los indices de fila sigan alineados con la tabla.
-  x_texto <- if (escrito) x else rep(NA_character_, length(x))
+  x_texto <- if (escrito) x_texto_diagnostico else {
+    rep(NA_character_, length(x))
+  }
   if (!all(aplicable)) {
     # Una geometria no admite `NA` -ver arriba, `x_identidad`- y los
     # diagnosticos de texto la tratan igual que a una columna de ausentes
@@ -2873,17 +3281,41 @@
       x_texto[!aplicable] <- NA
     }
   }
-  diagnostico_texto <- .diagnosticar_texto(x_texto, vocabulario = vocabulario_texto)
-  multivaluados <- if (is.character(x_analisis) || is.factor(x_analisis)) {
-    .detectar_multivaluados(x_analisis)
+  diagnostico_texto <- .diagnosticar_texto(
+    x_texto, vocabulario = vocabulario_texto_caro
+  )
+  if (is.character(x_analisis_diagnostico) ||
+      is.factor(x_analisis_diagnostico)) {
+    espacios_completos <- !is.na(x_analisis_diagnostico) &
+      .celdas_texto_protegidas(
+        as.character(x_analisis_diagnostico), "recortar_espacios"
+      )
+    diagnostico_texto$n_espacios_borde <- as.integer(sum(espacios_completos))
+    if (any(espacios_completos)) {
+      publicables_completos <- .vista_publicable(
+        preparacion_texto$valores_identidad, x_analisis_diagnostico
+      )
+      diagnostico_texto$evidencia_espacios <- paste(
+        .citar_publicable(utils::head(
+          .identificadores_unicos(publicables_completos[espacios_completos]),
+          6L
+        )), collapse = "; "
+      )
+    }
+  }
+  multivaluados <- if (is.character(x_analisis_diagnostico) ||
+                       is.factor(x_analisis_diagnostico)) {
+    .detectar_multivaluados(x_analisis_diagnostico)
   } else list()
-  n_blancos <- if (is.character(x_analisis) || is.factor(x_analisis)) {
-    sum(!is.na(x_analisis) & !nzchar(trimws(as.character(x_analisis))))
+  n_blancos <- if (is.character(x_analisis_diagnostico) ||
+                   is.factor(x_analisis_diagnostico)) {
+    sum(!is.na(x_analisis_diagnostico) &
+          !nzchar(trimws(as.character(x_analisis_diagnostico))))
   } else {
     0L
   }
 
-  fila <- data.frame(
+  fila <- .data_frame_simple(
     columna = nombre,
     tipo_declarado = .tipo_declarado(x),
     tipo_inferido = inferencia$tipo,
@@ -3080,18 +3512,22 @@
     aplicable = aplicable,
     # La declaracion `columnas_codigo`, para los hallazgos: la marca del resumen
     # numerico no existe en un codigo guardado como texto que no se lee numero.
-    codigo = isTRUE(codigo)
+    codigo = isTRUE(codigo),
+    texto_largo = texto_largo
   )
 }
 
 .perfilar_columna_matriz <- function(x, nombre, muestra, max_patrones,
                                      distinguir_mayusculas, expandir,
                                      umbral_patron_raro,
-                                     sentinelas_numericos) {
+                                     sentinelas_numericos,
+                                     max_largo_valor_vocabulario =
+                                       .MAX_LARGO_VALOR_CASI_DUPLICADOS) {
   resultado <- .perfilar_columna(
     rep(NA_character_, NROW(x)), nombre, muestra, max_patrones,
     distinguir_mayusculas, expandir, umbral_patron_raro,
-    sentinelas_numericos
+    sentinelas_numericos,
+    max_largo_valor_vocabulario = max_largo_valor_vocabulario
   )
   fila <- resultado$fila
   # `.tipo_declarado()` y no `"matriz"` fijo: una tabla anidada es compuesta y

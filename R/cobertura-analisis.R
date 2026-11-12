@@ -1,44 +1,32 @@
-.resolver_factor <- function(dimension, factor) {
+.resolver_factor <- function(dimension, factor, catalogo = NULL,
+                             especificaciones = NULL) {
+  if (is.null(catalogo)) catalogo <- catalogo_agesic()
   clave <- .clave_par_identificador(dimension, factor)
-  claves_especificas <- .clave_par_identificador(
-    c(
-      "Exactitud", "Exactitud", "Exactitud", "Consistencia", "Consistencia",
-      "Consistencia", "Completitud", "Completitud", "Unicidad", "Frescura",
-      "Frescura"
-    ),
-    c(
-      "Correctitud sem\u00e1ntica", "Correctitud sint\u00e1ctica", "Precisi\u00f3n",
-      "Integridad inter-entidad", "Integridad intra-entidad",
-      "Integridad de dominio", "Cobertura", "Densidad", "No-duplicaci\u00f3n",
-      "Actualidad", "Oportunidad"
-    )
-  )
-  indice <- match(clave, claves_especificas)
-  switch(
-    as.character(indice),
-    "1" =
-      "Crear referencial() e instanciar metricas_referencial().",
-    "2" =
-      "Especializar Formato con expresi\u00f3n, diccionario o validador.",
-    "3" =
-      "Declarar escala() o medir ErrorEstandar sobre el atributo.",
-    "4" =
-      "Instanciar ReglaIntegridadInterEntidad con claves confirmadas.",
-    "5" =
-      "Confirmar una regla y especializar ReglaIntegridadIntraEntidad.",
-    "6" =
-      "Proveer un dominio a ValoresPosiblesPorExtension o Comprension.",
-    "7" =
-      "Crear un referencial(completo = TRUE) y medir RatioCobertura.",
-    "8" = "Usar NoNulo o DensidadPonderada.",
-    "9" =
-      "Usar las m\u00e9tricas de duplicaci\u00f3n o el perfil autom\u00e1tico.",
-    "10" =
-      "Declarar vigencia() y medir DesactualizacionPorFecha o PorCambios.",
-    "11" =
-      "Declarar vigencia() y medir una m\u00e9trica Oportunidad*.",
-    "Requiere un backend o referencial especializado que no integra esta versi\u00f3n."
-  )
+  claves_catalogo <- .clave_par_identificador(catalogo$dimension, catalogo$factor)
+  entradas <- catalogo[
+    claves_catalogo == clave & as.character(catalogo$estado) %in%
+      c("implementada", "via_agregacion"), , drop = FALSE
+  ]
+  estados <- as.character(entradas$estado)
+  disponibles <- estados %in% c("implementada", "via_agregacion")
+  metricas <- .identificadores_unicos(entradas$metrica_lupa[
+    disponibles & !is.na(entradas$metrica_lupa)
+  ])
+  if (length(metricas)) {
+    if (is.null(especificaciones)) {
+      especificaciones <- .especificaciones_metricas_catalogo(catalogo)
+    }
+    faltantes <- setdiff(metricas, names(especificaciones))
+    if (length(faltantes)) {
+      .detener(
+        "Faltan especificaciones para las metricas del factor: ",
+        paste(faltantes, collapse = ", "), ".", call. = FALSE
+      )
+    }
+    seleccionadas <- unname(especificaciones[metricas])
+    return(.texto_factor_especificaciones(seleccionadas))
+  }
+  "Requiere un backend o referencial especializado que no integra esta versi\u00f3n."
 }
 
 .perfil_tiene_geometria <- function(perfil) {
@@ -81,8 +69,17 @@
 #' una métrica del factor; descubrir un patrón o una dependencia no los
 #' convierte por sí solo en un requisito confirmado.
 #'
-#' @param perfil **Primer argumento.** Objeto creado por [perfilar()]; es el
-#'   perfil descriptivo sobre cuyos factores se informa cobertura.
+#' Para AGESIC, `como_resolverlo` se deriva de las entradas implementadas o
+#' agregables de [catalogo_agesic()], no de una lista independiente de factores.
+#' Por ejemplo, `No-contradicción` recomienda instanciar
+#' `EntidadContradictoria` sobre un atributo; no requiere una clave y, cuando
+#' compara más de un valor distinto, necesita el paquete opcional `stringdist`.
+#'
+#' @param perfil **Primer argumento.** Objeto creado por [perfilar()] o
+#'   [perfilar_dbi()]. En el segundo caso se analiza `perfil_muestra` cuando
+#'   existe; un perfil por agregados usa el resumen de la tabla y cubre la
+#'   tabla completa. Cuando corresponde, cada motivo indica que la cobertura
+#'   es la de la muestra y no la de la tabla completa.
 #' @param medicion **Segundo argumento, opcional.** Objeto creado por
 #'   [medir()], con métricas ejecutadas que pueden completar esa cobertura.
 #'   No es un perfil creado por [perfilar()].
@@ -123,10 +120,43 @@
 #' cobertura_analisis(perfil)
 cobertura_analisis <- function(perfil, medicion = NULL,
                                modelo = marco_agesic()) {
+  es_perfil_dbi <- inherits(perfil, "perfil_dbi")
+  muestra_completa <- FALSE
+  if (es_perfil_dbi) {
+    muestra <- perfil$perfil_muestra
+    if (inherits(muestra, "perfil")) {
+      perfil <- muestra
+      muestreo <- perfil$meta$origen_dbi$muestreo
+      muestra_completa <- is.list(muestreo) &&
+        isTRUE(muestreo$tabla_completa)
+    } else {
+      resumen <- perfil$resumen_tabla
+      if (!is.list(resumen) || !is.data.frame(resumen$columnas)) {
+        .detener(
+          "El objeto `perfil_dbi` no trae un `perfil_muestra` ni un resumen",
+          " de tabla disponible para analizar la cobertura.", call. = FALSE
+        )
+      }
+      columnas <- resumen$columnas
+      if (!"tipo_declarado" %in% names(columnas)) {
+        columnas$tipo_declarado <- NA_character_
+      }
+      if (!"tipo_inferido" %in% names(columnas)) {
+        columnas$tipo_inferido <- NA_character_
+      }
+      filas_totales <- suppressWarnings(as.numeric(resumen$meta$filas))
+      perfil <- list(
+        columnas = columnas,
+        meta = list(filas_totales = filas_totales)
+      )
+      class(perfil) <- "perfil"
+      muestra_completa <- TRUE
+    }
+  }
   if (!inherits(perfil, "perfil")) {
     .detener(
-      "El primer argumento `perfil` debe ser un objeto creado por perfilar(); ",
-      "no es un perfil de evaluacion.", call. = FALSE
+      "El primer argumento `perfil` debe ser un objeto creado por perfilar() o",
+      " perfilar_dbi(); no es un perfil de evaluaci\u00f3n.", call. = FALSE
     )
   }
   if (!is.null(medicion) && !inherits(medicion, "medicion")) {
@@ -224,7 +254,11 @@ cobertura_analisis <- function(perfil, medicion = NULL,
     sin_observaciones <- factores$estado == "medida"
     factores$estado[sin_observaciones] <- "no_aplica"
     factores$motivo[sin_observaciones] <- if (sin_filas) {
-      "La tabla no tiene filas: no hubo nada que examinar para este factor."
+      if (es_perfil_dbi) {
+        "La muestra no tiene filas: no hubo nada que examinar para este factor."
+      } else {
+        "La tabla no tiene filas: no hubo nada que examinar para este factor."
+      }
     } else {
       paste0(
         "Ninguna columna pudo resumirse: el perfil no obtuvo evidencia para ",
@@ -235,9 +269,11 @@ cobertura_analisis <- function(perfil, medicion = NULL,
     parciales <- factores$estado == "medida"
     factores$motivo[parciales] <- paste0(
       "Parcial: el perfil obtuvo resumen en ", resumidas, " de ",
-      total_columnas, " columnas. En las otras ",
+      total_columnas, if (total_columnas == 1L) " columna. En la otra " else " columnas. En las otras ",
       total_columnas - resumidas,
-      " no hubo evidencia para este factor."
+      if (total_columnas - resumidas == 1L) {
+        " no hubo evidencia para este factor."
+      } else " no hubo evidencia para este factor."
     )
   }
 
@@ -249,6 +285,12 @@ cobertura_analisis <- function(perfil, medicion = NULL,
     factores$estado[indices] <- "medida"
     factores$motivo[indices] <-
       "La corrida contiene al menos una m\u00e9trica instanciada para este factor."
+  }
+  if (es_perfil_dbi && !muestra_completa) {
+    factores$motivo <- paste0(
+      factores$motivo,
+      " La cobertura se calcul\u00f3 sobre `perfil_muestra`; no representa la tabla completa."
+    )
   }
   factores$estado <- factor(
     factores$estado,

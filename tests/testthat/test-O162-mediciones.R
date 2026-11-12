@@ -335,7 +335,7 @@ test_that("M1: la corroboracion no publica como divergencia lo que una declaraci
 test_that("M1: el BIGINT desde 2^53 no publica divergencias que la guarda crea a proposito", {
   skip_if_not_installed("DBI")
   skip_if_not_installed("RSQLite")
-  skip_if_not_installed("bit64", "4.6.0")
+  skip_if_not_installed("bit64")
   con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   # Doce identificadores tipo snowflake, `15` y 17 cifras: todos > 1,5e18, asi
@@ -382,7 +382,7 @@ test_that("B3: con el BIGINT entregado como doble, el consejo nombra el argument
   ))
   sql <- suppressWarnings(perfilar_dbi(con, "big", proteger_datos_personales = FALSE))$resumen_tabla$sql
   motivo <- sql$motivo[sql$columna == "v" & sql$metrica == "maximo"]
-  expect_match(motivo, "driver entrego como doble", fixed = TRUE)
+  expect_match(motivo, "driver entreg\u00f3 como doble", fixed = TRUE)
   expect_match(motivo, "`DBI::dbConnect()` en RSQLite, RPostgres, RMariaDB y odbc",
                fixed = TRUE)
 })

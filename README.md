@@ -10,7 +10,12 @@ scope and what it could not measure.
 
 [![R-CMD-check](https://github.com/sebollin/lupa/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/sebollin/lupa/actions/workflows/R-CMD-check.yaml)
 [![Engines CI](https://img.shields.io/github/actions/workflow/status/sebollin/lupa/motores.yaml?branch=main&label=engines%20CI)](https://github.com/sebollin/lupa/actions/workflows/motores.yaml)
+[![CRAN status](https://www.r-pkg.org/badges/version/lupa)](https://CRAN.R-project.org/package=lupa)
+[![CRAN downloads](https://cranlogs.r-pkg.org/badges/grand-total/lupa)](https://CRAN.R-project.org/package=lupa)
+[![CRAN downloads per month](https://cranlogs.r-pkg.org/badges/lupa)](https://CRAN.R-project.org/package=lupa)
+[![Dependencies](https://tinyverse.netlify.app/badge/lupa)](https://CRAN.R-project.org/package=lupa)
 [![r-universe](https://sebollin.r-universe.dev/lupa/badges/version)](https://sebollin.r-universe.dev/lupa)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.24117753-1682D4.svg)](https://doi.org/10.5281/zenodo.24117753)
 [![R \>= 4.2.0](https://img.shields.io/badge/R-%E2%89%A5%204.2.0-276DC3.svg)](https://cran.r-project.org/)
 [![Lifecycle: stable](https://img.shields.io/badge/lifecycle-stable-0D9786.svg)](https://lifecycle.r-lib.org/articles/stages.html#stable)
 [![License: GPL-3](https://img.shields.io/badge/license-GPL--3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
@@ -29,7 +34,7 @@ scope and what it could not measure.
   - repeated rows and columns;
   - structure nobody declared.
 
-It says which rows each problem is in and which checks it could not run. Then it
+It says which rows most problems are in and which checks it could not run. Then it
 helps turn what was confirmed into measurements, evaluate them, clean a copy with
 an editable plan and compare deliveries. It is for anyone who analyzes, produces
 or publishes tabular data and needs to know how far it can be trusted.
@@ -73,7 +78,8 @@ enable specific capabilities:
 
 The API, the help pages, the guides and the printed output are in Spanish, and
 the public names are part of the contract: the outputs below appear exactly as
-`lupa` writes them.
+`lupa` writes them. The website also has an English version of 4 guides,
+under [Guides in English](https://sebollin.github.io/lupa/articles/index.html).
 
 ## ⏱ In 30 s
 
@@ -129,15 +135,15 @@ rows that fit within the caps come into R. The same surface is measured against
 | DuckDB     | 1.5            | `duckdb`    |
 | MariaDB    | 11             | `RMariaDB`  |
 | MySQL      | 8              | `RMySQL`    |
-| PostgreSQL | 16             | `RPostgres` |
+| PostgreSQL | 9.3 and 16     | `RPostgres` |
 | SQL Server | 2022           | `odbc`      |
 | SQLite     | —              | `RSQLite`   |
 
-PostgreSQL and MariaDB are measured on every push
+PostgreSQL 16 and MariaDB are measured on every push
 ([engines CI](https://github.com/sebollin/lupa/actions/workflows/motores.yaml)),
-and SQLite and DuckDB by the test suite on every CI platform; MySQL and SQL
-Server, against local containers before each release. Oracle is expected to
-work but has not been measured, and BigQuery is not documented.
+and SQLite and DuckDB by the test suite on every CI platform; MySQL, SQL Server
+and PostgreSQL 9.3, against local containers before each release. Oracle is
+expected to work but has not been measured, and BigQuery is not documented.
 `requisitos_motor()` says what each engine needs. The versions, the drivers and
 the date of each run are in
 [Motores y escala](https://sebollin.github.io/lupa/articles/motores-y-escala.html#motores-probados)
@@ -184,8 +190,8 @@ the case can be looked up in the source system without opening the table:
 
 ``` r
 con_clave <- perfilar(datos_operativos, clave = "id_evento")
-#> Warning: La clave declarada no es única: entre las 13 filas con la clave completa, 1 repite su
-#> valor (2 filas participan en colisiones). La clave cumple la ausencia de nulos: no tiene
+#> Warning: La clave declarada no es única: entre 13 filas con la clave completa, 1 repite su valor
+#> (2 filas participan en colisiones). La clave cumple la ausencia de nulos: no tiene
 #> valores ausentes.
 h <- hallazgos(con_clave)
 fila <- which(h$tipo_hallazgo == "faltantes_disfrazados" &
@@ -260,12 +266,12 @@ names(en_la_base)
 #> [1] "resumen_tabla"  "perfil_muestra"
 ```
 
-| Option                                                  | SQL aggregates over          | Brings rows into R?                                    |
-| ------------------------------------------------------- | ---------------------------- | ------------------------------------------------------ |
-| Default: `universo = "tabla_completa"`, `muestra = Inf` | the whole table              | Yes: all that fit within the cell and byte caps        |
-| `muestra = n`                                           | the whole table              | Yes, up to `n`: it bounds the read, not the aggregates |
-| `universo = "muestra_motor"`, `muestra_motor = n`       | a sample taken by the engine | Yes, the rows in that sample                           |
-| `bloque_muestra = "solo_agregados"`                     | whatever `universo` says     | No: aggregates only, no row-level findings             |
+| Option                                                  | SQL aggregates over                  | Brings rows into R?                                    |
+| ------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------ |
+| Default: `universo = "tabla_completa"`, `muestra = Inf` | the whole table                      | Yes: all that fit within the cell and byte caps        |
+| `muestra = n`                                           | the whole table                      | Yes, up to `n`: it bounds the read, not the aggregates |
+| `universo = "muestra_motor"`, `muestra_motor = n`       | up to `n` rows sampled by the engine | Yes, the rows effectively materialized after the caps  |
+| `bloque_muestra = "solo_agregados"`                     | whatever `universo` says             | No: aggregates only, no row-level findings             |
 
 Without `orden_muestra`, a `muestra = n` read gets the first rows the engine
 returns, in an order SQL does not guarantee; with `orden_muestra` the read can be
@@ -283,6 +289,11 @@ in [Perfilar una base](https://sebollin.github.io/lupa/articles/perfilar-una-bas
   - **Sample caps.** What is read into R, or sampled within R, stops at
     1,000,000 cells (`max_celdas_muestra`) and 512 MiB (`max_bytes_muestra`),
     and the cut is recorded in `cobertura()` together with the cap that triggered it ([Motores y escala](https://sebollin.github.io/lupa/articles/motores-y-escala.html#topes)).
+    In `muestra_motor`, the spool uses a conservative maximum row size before
+    each `dbFetch(n)`. Long text is requested as length and MD5 summary, so its
+    content cannot make a fetch exceed that bound; unknown types are probed one
+    row at a time. It records requested and effective rows, the measured size
+    and the real fraction before returning the profile.
   - **Cost policy.** In `perfilar_dbi()`, `politica_costo = "todas"` (the
     default) computes the mode and the median in every column; `"por_cardinalidad"` skips
     the mode where the proportion of distinct values reaches `umbral_cardinalidad` (0.5),
@@ -295,9 +306,10 @@ in [Perfilar una base](https://sebollin.github.io/lupa/articles/perfilar-una-bas
     stays with the exact or sampled comparison, and `estrategia = "lsh"` forces it.
     `estimar_costo()` anticipates the switch ([Escala y duplicados aproximados](https://sebollin.github.io/lupa/articles/escala-y-duplicados.html)).
   - **Wide tables.** From 100,000 cells up, an interactive session
-    gets a notice of how long `perfilar()` may take; the estimate relies on an
-    assumption built into the code (10,000 cells per second), not on a measurement
-    of the machine; the dated measurements are in [Evidencia y rendimiento](https://sebollin.github.io/lupa/articles/evidencia-y-rendimiento.html).
+    gets a notice of how long `perfilar()` may take; the estimate relies on a
+    code reference (5,000 cells per second), set below the slowest
+    wide-table measurement, with numeric and categorical columns and with identical
+    columns of text codes; the dated measurements are in [Evidencia y rendimiento](https://sebollin.github.io/lupa/articles/evidencia-y-rendimiento.html).
   - **Millions of rows in memory.** `perfilar()` and `analizar()` take minutes, not
     seconds: profile a sample or use `perfilar_dbi()` instead. The measured figures,
     with their dates, are in [Evidencia y rendimiento](https://sebollin.github.io/lupa/articles/evidencia-y-rendimiento.html) (*Evidence and performance*).
@@ -308,6 +320,8 @@ in [Perfilar una base](https://sebollin.github.io/lupa/articles/perfilar-una-bas
 temporal analysis into one object, together with a proposed quality model, its
 dashboard and a cleaning plan; `reportar()` writes it all to a self-contained
 HTML file for sharing.
+
+![Top of the self-contained HTML report: scope warnings, the profile summary and the start of the findings table](man/figures/informe-html.png)
 
 ``` r
 analisis <- analizar(datos_operativos)
@@ -365,7 +379,9 @@ one); 7 to 12 are on the website only.
 
 ## For advanced users
 
-The detailed reference lives in four articles on the website, in Spanish.
+The detailed reference lives in four articles on the website, in Spanish;
+[Engines and scale](https://sebollin.github.io/lupa/articles/engines-and-scale.html)
+is the English version of the first one.
 Whatever changes the cost, the memory use or the meaning of a result is also in
 the help page of each function, which ships with the package (`?perfilar`, `?perfilar_dbi`,
 `?plan_perfilado_dbi`, `?detectar_duplicados_aproximados`).
@@ -388,6 +404,11 @@ date and checksum ([Evidencia y rendimiento](https://sebollin.github.io/lupa/art
 citation("lupa")
 ```
 
+Every release is archived on Zenodo:
+[10.5281/zenodo.24117753](https://doi.org/10.5281/zenodo.24117753) always
+resolves to the latest version, and each version has its own DOI there for
+citing an exact release.
+
 The conceptual references are [Batini and Scannapieco (2016)](https://doi.org/10.1007/978-3-319-24106-7),
 the [Data Quality Management Framework for Digital Government v1.6](https://www.gub.uy/agencia-gobierno-electronico-sociedad-informacion-conocimiento/comunicacion/publicaciones/marco-trabajo-para-gestion-calidad-datos)
 by AGESIC, the [CEA/CEPAL quality assurance framework (2022)](https://repositorio.cepal.org/handle/11362/47464)
@@ -396,7 +417,7 @@ and [ISO/IEC 25012:2008](https://www.iso.org/standard/35736.html).
 The public API of `lupa` may change before 1.0; breaking changes are
 announced in [NEWS](https://github.com/sebollin/lupa/blob/main/NEWS.md), with a deprecation warning
 first whenever possible. The stable contracts are the declared units, the
-scope, the protection of personal data and the audit log; implementation
+scope, the audit log and, when it is requested, the protection of personal data; implementation
 details and timings may change as long as those contracts still hold.
 
 Bugs, proposals and documentation fixes go to the

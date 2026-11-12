@@ -17,7 +17,8 @@ detectar_dependencias(
   max_comparaciones = 200000L,
   max_trabajo = 1e+08,
   proteger_datos_personales = FALSE,
-  columnas_personales = character()
+  columnas_personales = character(),
+  sentinelas_numericos = NULL
 )
 }
 \arguments{
@@ -65,6 +66,12 @@ con nombre donde el nombre es la columna y el valor es el tipo. Sin ella,
 una columna que el léxico no reconoce —un legajo interno— publica sus
 valores en \code{evidencia}. Sólo tiene efecto con
 \code{proteger_datos_personales = TRUE}.}
+
+\item{sentinelas_numericos}{Vector de valores declarados como ausencia. Las
+celdas que contienen un valor declarado no participan en la dependencia,
+igual que una celda \code{NA}; por eso \code{n_evaluados} cuenta sólo las filas con
+ambas columnas presentes. La lista por omisión no se considera una
+declaración.}
 }
 \value{
 Data frame de clase \code{dependencias_funcionales}, ordenado por
@@ -79,7 +86,11 @@ cita la cédula— se tapa con el mismo piso que aplica \code{\link[=perfilar]{p
 \code{n_pares_comparados}, \code{n_pares_sin_comparar} y \code{max_comparaciones}
 documentan el presupuesto de comparaciones. \code{trabajo_estimado},
 \code{trabajo_comparado}, \code{trabajo_sin_comparar}, \code{unidad_trabajo} y
-\code{max_trabajo} documentan el presupuesto por filas. \code{columnas_descartadas}
+\code{max_trabajo} documentan el presupuesto por filas. Con muestra,
+\code{verificadas_tabla_completa} dice, fila por fila, si las cifras se
+recalcularon sobre la tabla completa, y \code{n_descartadas_tabla_completa}
+cuenta las que la muestra mostraba y la tabla no sostiene.
+\code{columnas_descartadas}
 es un data frame que explica por qué una columna no se usó como
 determinante. Una columna cuyo nombre se repite en la tabla no entra en
 ninguna dependencia, de ningún lado, y se descarta con el motivo
@@ -95,7 +106,11 @@ directamente las filas minoritarias que pueden ser errores de carga.
 Para evitar resultados vacíos o triviales, se omiten por defecto las claves
 únicas, los determinantes cuya tasa de valores distintos alcanza
 \code{umbral_casi_clave}, los determinantes cuya moda alcanza
-\code{umbral_casi_constante} y los dependientes constantes. El
+\code{umbral_casi_constante} y los dependientes constantes. Tampoco se informa un
+par cuyo determinante no acierta más filas que la moda del dependiente sin
+agrupar: con un dependiente casi constante —un \code{estado} que vale \code{"ACTIVO"}
+en el 99,7 \% de las filas— cualquier columna alcanzaría el umbral sin
+aportar nada. El
 valor predeterminado de \code{umbral = 0.995} exige que como máximo 5 de cada
 1.000 filas contradigan la relación. Los ausentes de cualquiera de las dos
 columnas no integran el cálculo.
@@ -108,21 +123,35 @@ toman como determinantes ni dependientes: no son valores escalares por fila.
 
 El costo crece aproximadamente como \code{columnas^2 * filas}. \code{max_columnas}
 conserva las primeras columnas analizables, \code{max_comparaciones} limita el
-número de pares columna a columna y \code{muestra} aplica una única muestra
-sistemática a toda la tabla, de modo que las relaciones entre filas no se
-rompen. \code{max_trabajo} acota el producto entre pares posibles y filas
+número de pares columna a columna y \code{muestra} aplica una única muestra de
+filas enteras a toda la tabla, de modo que las relaciones entre filas no se
+rompen. La muestra parte la tabla en tantos tramos consecutivos como filas
+pide y toma una de cada tramo, en una posición que sale de un hash
+determinista del número de tramo: es la misma en cada corrida, no usa el
+generador de números aleatorios ni su estado, y no se alinea con datos
+periódicos. \code{max_trabajo} acota el producto entre pares posibles y filas
 analizadas. Es un presupuesto estimado, no una medición de segundos: permite
 que el tope efectivo de pares baje cuando la tabla tiene muchas filas. Los
 atributos del resultado declaran todos los recortes.
 
 Una muestra conserva cada fila entera, pero no la cantidad de filas por
-valor: sobre datos agrupados en filas consecutivas, la muestra sistemática
-toma una fila de cada grupo y el determinante parece una clave. Por eso los
+valor: sobre datos agrupados en filas consecutivas, la muestra toma a lo
+sumo una fila de cada tramo y el determinante parece una clave. Por eso los
 descartes por casi-clave y casi-constante se verifican sobre la columna
 completa; si sólo la muestra los produjo, el motivo es
 \code{casi_clave_solo_en_muestra} o \code{casi_constante_solo_en_muestra}, la columna
 sigue fuera —evaluarla sobre esa muestra daría dependencias exactas sin
 evidencia— y \code{\link[=perfilar]{perfilar()}} lo declara en \code{cobertura_diagnosticos}.
+
+Lo que la muestra encuentra se recalcula sobre la tabla completa: cada
+dependencia publicada sale con el cumplimiento, los grupos, las violaciones
+y la evidencia de todas las filas, y la que ya no alcanza el criterio no se
+publica. Una muestra puede mostrar exacta una relación que la tabla
+contradice —una muestra sistemática, a paso fijo, se alineaba con un panel
+mensual cuyo tamaño hacía que el paso cayera justo en el período, y tomaba
+siempre los mismos meses—. El recálculo cuesta una pasada por dependencia publicada y entra
+en \code{max_trabajo}; las que no entran conservan las cifras de la muestra, y
+\code{\link[=perfilar]{perfilar()}} lo declara.
 }
 \examples{
 datos <- data.frame(

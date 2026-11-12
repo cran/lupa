@@ -28,6 +28,19 @@ skip_if_not_installed("RSQLite")
   )
 }
 
+.memoria_trabajo_perfil_con_aviso <- function(...) {
+  avisos <- character()
+  resultado <- withCallingHandlers(
+    .memoria_trabajo_perfil(...),
+    warning = function(x) {
+      avisos <<- c(avisos, conditionMessage(x))
+      invokeRestart("muffleWarning")
+    }
+  )
+  expect_length(avisos, 0L)
+  resultado
+}
+
 .memoria_trabajo_datos <- function(n = 100000L) {
   n_distintos <- min(90000L, n)
   repetidos <- n - n_distintos
@@ -126,7 +139,7 @@ test_that("una muestra saturada clasifica el spool como trabajo creciente", {
   conexion <- .memoria_trabajo_conexion(.memoria_trabajo_datos(20L))
   on.exit(DBI::dbDisconnect(conexion), add = TRUE)
 
-  resultado <- .memoria_trabajo_perfil(
+  resultado <- .memoria_trabajo_perfil_con_aviso(
     conexion,
     universo = "muestra_motor", muestra_motor = 1000L,
     bloque_muestra = "con_muestra",
@@ -196,6 +209,7 @@ test_that("el registro coincide con los metodos publicados, sin clasificar por m
     "cte_ventana_tablesample_system" = "creciente",
     "cte_ventana_newid" = "creciente",
     "dos_consultas" = "creciente",
+    "sumas_exactas_decimal" = "acotado",
     "PERCENTILE_CONT" = "creciente",
     "PERCENTILE_CONT_OVER" = "creciente",
     "approx_percentile" = "acotado",
@@ -325,7 +339,7 @@ test_that("una muestra saturada conserva el limite y declara el spool", {
   conexion <- .memoria_trabajo_conexion()
   on.exit(DBI::dbDisconnect(conexion), add = TRUE)
 
-  resultado <- .memoria_trabajo_perfil(
+  resultado <- .memoria_trabajo_perfil_con_aviso(
     conexion,
     universo = "muestra_motor", muestra_motor = 200000L,
     bloque_muestra = "con_muestra",
@@ -347,7 +361,17 @@ test_that("una muestra saturada conserva el limite y declara el spool", {
   expect_true(nrow(muestras) > 0L)
   expect_true(all(muestras$tamano_muestra == 100000))
   expect_true(all(muestras$fraccion == 1))
-  expect_true(all(muestras$estado == "observado_muestra"))
+  esperados_estado <- c(
+    n_validos = "observado_muestra", n_faltantes = "observado_muestra",
+    prop_faltantes = "observado_muestra", n_distintos = "observado_muestra",
+    tasa_distintos = "observado_muestra", moda = "estimado",
+    frecuencia_moda = "observado_muestra", minimo = "estimado",
+    maximo = "estimado", media = "estimado", n_ceros = "observado_muestra",
+    n_negativos = "observado_muestra", mediana = "estimado", desvio = "estimado"
+  )
+  expect_identical(
+    muestras$estado, unname(esperados_estado[muestras$metrica])
+  )
   expect_true(all(muestras$memoria_trabajo == "creciente"))
   expect_true(isTRUE(resultado$resumen_tabla$meta$materializacion$validado_relectura))
   expect_identical(distintos$metodo[[1L]], "spool_sesion_cliente")

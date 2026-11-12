@@ -102,6 +102,91 @@
   textos
 }
 
+# Convierte una cadena marcada `latin1` antes de entregarla a una primitiva de
+# texto. R usa Windows-1252 para `enc2utf8()`: eso es lo correcto para los
+# archivos que llegan de planillas, pero sus cinco bytes sin correspondencia
+# se vuelven el texto literal `<81>`, `<8D>`, `<8F>`, `<90>` o `<9D>`. En una
+# cadena declarada `latin1` esos bytes son los puntos C1 correspondientes, asi
+# que solo esos tramos se convierten por punto de codigo y el resto conserva la
+# traduccion Windows-1252 que ya usa el paquete.
+.latin1_a_utf8 <- function(textos, marcas = NULL) {
+  if (!is.character(textos) || !length(textos)) return(textos)
+  if (is.null(marcas)) marcas <- Encoding(textos)
+  indices <- which(!is.na(textos) & marcas == "latin1")
+  if (!length(indices)) return(textos)
+  indefinidos <- c(0x81L, 0x8dL, 0x8fL, 0x90L, 0x9dL)
+  salida <- textos
+  for (indice in indices) {
+    bytes <- as.integer(charToRaw(textos[[indice]]))
+    posiciones <- which(bytes %in% indefinidos)
+    if (!length(posiciones)) {
+      salida[[indice]] <- enc2utf8(textos[[indice]])
+      next
+    }
+    partes <- character()
+    inicio <- 1L
+    for (posicion in posiciones) {
+      if (posicion > inicio) {
+        tramo <- rawToChar(as.raw(bytes[inicio:(posicion - 1L)]))
+        Encoding(tramo) <- "latin1"
+        partes <- c(partes, enc2utf8(tramo))
+      }
+      partes <- c(partes, intToUtf8(bytes[[posicion]]))
+      inicio <- posicion + 1L
+    }
+    if (inicio <= length(bytes)) {
+      tramo <- rawToChar(as.raw(bytes[inicio:length(bytes)]))
+      Encoding(tramo) <- "latin1"
+      partes <- c(partes, enc2utf8(tramo))
+    }
+    salida[[indice]] <- paste0(partes, collapse = "")
+  }
+  salida
+}
+
+# Deja cada valor en una forma segura para `trimws()` y las expresiones
+# regulares. Las cadenas ilegibles sin marca quedan intactas: la accion que las
+# recibe decide no tocarlas, en vez de inventar una codificacion.
+.texto_para_operar <- function(textos, marcas = c("unknown", "bytes")) {
+  textos <- as.character(textos)
+  if (length(textos) == 1L && !is.na(textos)) {
+    marca <- Encoding(textos)
+    if (identical(marca, "latin1")) return(.latin1_a_utf8(textos))
+    if (marca %in% marcas && validUTF8(textos)) Encoding(textos) <- "UTF-8"
+    return(textos)
+  }
+  textos <- .declarar_utf8_valido(textos, marcas = marcas)
+  marcas_texto <- Encoding(textos)
+  if (!any(marcas_texto == "latin1")) return(textos)
+  .latin1_a_utf8(textos, marcas = marcas_texto)
+}
+
+# Mide caracteres sin pedirle a R que interprete una cadena que se declaro como
+# bytes o que trae una secuencia invalida. En esos casos no hay una cantidad de
+# caracteres que el paquete pueda afirmar: se devuelve NA, mientras el largo en
+# bytes sigue disponible para los topes y las claves.
+.nchar_texto_seguro <- function(textos) {
+  textos <- as.character(textos)
+  if (!length(textos)) return(integer())
+  latin1 <- !is.na(textos) & Encoding(textos) == "latin1"
+  if (any(latin1)) textos[latin1] <- enc2utf8(textos[latin1])
+  validos <- !is.na(textos)
+  if (any(validos)) {
+    trabajo <- textos[validos]
+    interpretables <- !is.na(trabajo) &
+      Encoding(trabajo) %in% c("unknown", "bytes") & validUTF8(trabajo)
+    if (any(interpretables)) {
+      marcados <- trabajo[interpretables]
+      Encoding(marcados) <- "UTF-8"
+      trabajo[interpretables] <- marcados
+    }
+    invalidos <- !is.na(trabajo) & !validUTF8(trabajo)
+    if (any(invalidos)) trabajo[invalidos] <- NA_character_
+    textos[validos] <- trabajo
+  }
+  nchar(textos, type = "chars", allowNA = TRUE)
+}
+
 # Deja el vector en un estado que las operaciones Unicode puedan leer sin
 # depender del locale.
 # Los que ya son UTF-8 valido se MARCAN -conserva los acentos, que es lo que el
@@ -118,11 +203,7 @@
 # locale.
 .textos_para_plegar <- function(textos) {
   if (!length(textos)) return(textos)
-  textos <- .declarar_utf8_valido(as.character(textos))
-  en_latin1 <- !is.na(textos) & Encoding(textos) == "latin1"
-  if (any(en_latin1)) {
-    textos[en_latin1] <- iconv(textos[en_latin1], from = "latin1", to = "UTF-8")
-  }
+  textos <- .texto_para_operar(textos)
   sin_marca <- !is.na(textos) & Encoding(textos) %in% c("unknown", "bytes")
   if (!any(sin_marca)) return(textos)
   irreparables <- sin_marca
@@ -165,7 +246,7 @@
   function(patron) {
     if (!is.character(patron) || length(patron) != 1L || is.na(patron) ||
         !nzchar(patron)) {
-      .detener("`patron` debe ser un texto no vacio.", call. = FALSE)
+      .detener("`patron` debe ser un texto no vac\u00edo.", call. = FALSE)
     }
     hecho <- get0(patron, envir = memoria, inherits = FALSE)
     if (!is.null(hecho)) return(hecho)
@@ -177,7 +258,7 @@
     letra <- function(x) grepl("^[A-Za-z]$", x, perl = TRUE)
     salida <- vapply(piezas, function(pieza) {
       if (startsWith(pieza, "(?") && grepl("^\\(\\?[A-Za-z^-]$", pieza, perl = TRUE)) {
-        .detener("El patron trae un modificador en linea: ", pieza, call. = FALSE)
+        .detener("El patr\u00f3n trae un modificador en l\u00ednea: ", pieza, call. = FALSE)
       }
       if (startsWith(pieza, "[") && nchar(pieza, type = "bytes") > 1L) {
         cuerpo <- gsub(
@@ -263,15 +344,34 @@
 #      marcas en un paso.
 #   4. La transliteracion del paquete y el pliegue ASCII terminan lo que el
 #      mapa deja: `ae` por la ligadura, `o` por la O con trazo.
+#
+# El costo de este pliegue era casi todo fijo: `chartr()` arma su tabla con el
+# mapa entero -tres mil pares- en cada llamada, unos 0,6 ms aunque la entrada sea
+# una palabra, y la proteccion lo llama cientos de veces por informe con pocos
+# textos cada vez (160 llamadas en `analizar()` sobre la tabla de ejemplo, 12
+# textos de mediana). Dos atajos, que dan lo mismo que el camino largo:
+#
+#   - La entrada toda ASCII. Ningun caracter ASCII esta en los mapas -ni en el
+#     de Unicode, ni en la transliteracion, ni en las minusculas acentuadas- ni
+#     casa las letras modificadoras: de todo el camino solo le toca la caja
+#     ASCII. Eran 92 de las 138 llamadas que no venian vacias.
+#   - El mapa reducido a los caracteres que aparecen. `chartr()` cambia cada
+#     caracter por separado, y el mapa no tiene guiones -que `chartr()` lee como
+#     rango- ni origenes repetidos: el par de un caracter que no esta en la
+#     entrada no cambia nada. Averiguar cuales estan cuesta por caracter, y
+#     pasados unos 60 KB de entrada cuesta mas que la tabla entera (medido): desde
+#     32 KB va el mapa entero, cuyo costo fijo ya no pesa.
+#
+# `atajos = FALSE` recorre siempre el camino largo; es la referencia con que se
+# prueban los atajos.
 .plegar_para_comparar <- local({
-  origen_uno <- paste0(
-    intToUtf8(strtoi(names(.PLIEGUE_COMPARAR_UNO), base = 16L), multiple = TRUE),
-    collapse = ""
-  )
-  destino_uno <- paste0(
-    intToUtf8(unname(.PLIEGUE_COMPARAR_UNO), multiple = TRUE),
-    collapse = ""
-  )
+  codigos_uno <- strtoi(names(.PLIEGUE_COMPARAR_UNO), base = 16L)
+  destinos_uno <- unname(.PLIEGUE_COMPARAR_UNO)
+  letras_origen_uno <- intToUtf8(codigos_uno, multiple = TRUE)
+  letras_destino_uno <- intToUtf8(destinos_uno, multiple = TRUE)
+  origen_uno <- paste0(letras_origen_uno, collapse = "")
+  destino_uno <- paste0(letras_destino_uno, collapse = "")
+  tope_mapa_reducido <- 32768
   fuentes_varios <- strtoi(names(.PLIEGUE_COMPARAR_VARIOS), base = 16L)
   destinos_varios <- vapply(
     strsplit(unname(.PLIEGUE_COMPARAR_VARIOS), " ", fixed = TRUE),
@@ -289,11 +389,14 @@
   # como se lee lo que no es UTF-8 valido, byte por byte conservando las
   # secuencias validas, o la celda entera como CP1252; quien compara mira las
   # dos, porque un par latin1 puede ser por azar una letra UTF-8 valida.
-  function(textos, desescapar = FALSE, invalidos = c("por_byte", "entero")) {
+  function(textos, desescapar = FALSE, invalidos = c("por_byte", "entero"),
+           atajos = TRUE) {
     invalidos <- match.arg(invalidos)
     textos <- as.character(textos)
     if (!length(textos)) return(textos)
     if (desescapar) textos <- .desescapar_para_comparar(textos)
+    # Despues de desescapar: el escape `<lupa-byte:E9>` es ASCII y lo que deja no.
+    if (atajos && .es_ascii(textos)) return(.minusculas_ascii(textos))
     marcas <- Encoding(textos)
     presentes <- !is.na(textos)
     en_latin1 <- presentes & marcas == "latin1"
@@ -320,8 +423,36 @@
         }
       }
     }
-    textos <- chartr(origen_uno, destino_uno, textos)
-    con_varios <- presentes & grepl(clase_varios, textos, perl = TRUE)
+    # Aca todo lo presente es UTF-8 valido, marcado o ASCII; si no lo fuera, el
+    # camino largo.
+    puntos <- NULL
+    if (atajos &&
+        sum(nchar(textos[presentes], type = "bytes")) <= tope_mapa_reducido &&
+        all(validUTF8(textos[presentes])) &&
+        !any(Encoding(textos[presentes]) %in% c("latin1", "bytes"))) {
+      puntos <- unique(utf8ToInt(paste0(textos[presentes], collapse = "")))
+      if (anyNA(puntos)) puntos <- NULL
+    }
+    if (is.null(puntos)) {
+      textos <- chartr(origen_uno, destino_uno, textos)
+      con_varios <- presentes & grepl(clase_varios, textos, perl = TRUE)
+    } else {
+      cuales <- match(puntos, codigos_uno)
+      mapeados <- cuales[!is.na(cuales)]
+      if (length(mapeados)) {
+        textos <- chartr(paste0(letras_origen_uno[mapeados], collapse = ""),
+                         paste0(letras_destino_uno[mapeados], collapse = ""),
+                         textos)
+      }
+      # Los caracteres que quedan despues del mapa: si ninguno tiene pliegue de
+      # varios caracteres, la clase no casa en ningun texto.
+      quedan <- c(puntos[is.na(cuales)], destinos_uno[mapeados])
+      con_varios <- if (any(quedan %in% fuentes_varios)) {
+        presentes & grepl(clase_varios, textos, perl = TRUE)
+      } else {
+        rep(FALSE, length(textos))
+      }
+    }
     if (any(con_varios)) {
       textos[con_varios] <- vapply(textos[con_varios], function(texto) {
         puntos <- utf8ToInt(texto)

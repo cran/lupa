@@ -32,6 +32,16 @@
     },
     .consultar_dbi = function(conexion, sql, presupuesto = NULL, filas = -1L,
                               etapa = "consulta") {
+      if (grepl("pg_settings", sql, fixed = TRUE)) {
+        return(list(
+          ok = TRUE,
+          datos = data.frame(
+            name = c("work_mem", "hash_mem_multiplier"),
+            setting = c("4MB", "2"), stringsAsFactors = FALSE
+          ),
+          motivo = NA_character_
+        ))
+      }
       if (grepl("^EXPLAIN", sql)) {
         json <- paste0(
           "[{\"Plan\":{\"Node Type\":\"Limit\",\"Plans\":[",
@@ -154,12 +164,12 @@ test_that("el aviso de mediana se conserva con denominador de catalogo", {
   )
 
   expect_true(isTRUE(actualizada$supera_memoria))
-  expect_identical(actualizada$fuente_denominador, "estimacion de catalogo")
+  expect_identical(actualizada$fuente_denominador, "estimaci\u00f3n de cat\u00e1logo")
   expect_message(
     lupa:::.avisar_derrame_estimado_postgresql_dbi(
       actualizada, familia = "la mediana", umbral_bytes = 0
     ),
-    "supera.*Denominador: con estimacion de catalogo"
+    "supera.*Denominador: con estimaci\u00f3n de cat\u00e1logo"
   )
 })
 

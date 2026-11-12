@@ -108,9 +108,24 @@ ejemplo, antes de \code{ANALYZE}— o hay ambigüedad, la métrica queda
 (por omisión) o \code{"aproximada_motor"}. La sonda prueba siempre primero una
 forma nativa exacta consolidada, luego una forma exacta por columna y deja
 las funciones nativas aproximadas para el final. Por eso esta opción
-describe la estrategia habilitada, no garantiza el método ejecutado:
-\code{meta$estrategia_mediana} y \code{resumen_tabla$sql$metodo} publican el método
-que efectivamente corrió. Una mediana resuelta por una forma exacta queda
+describe la estrategia habilitada, no garantiza el método ejecutado. El
+método que efectivamente corrió está en \code{resumen_tabla$sql$metodo}, en la
+fila de \code{metrica = "mediana"} de cada columna, y es la única fuente por
+columna. \code{meta$estrategia_mediana} publica la resolución de la tabla:
+lo pedido (\code{estrategia_solicitada}), la forma que el motor aceptó para la
+tabla (\code{estrategia_resuelta}), su \code{estado} y su \code{motivo}. No es el método
+de cada columna: una columna que no puede usar esa forma —un \code{float8} de
+PostgreSQL, que la deja por la lectura exacta, o una columna con
+extremos— corre por otra (\code{dos_consultas} en la tabla completa, la CTE de
+ventanas en la muestra) y lo declara en su fila de \code{resumen_tabla$sql},
+aunque \code{meta$estrategia_mediana} siga nombrando la consolidada. El \code{estado}
+de \code{meta$estrategia_mediana} describe la forma, no la fila: en
+\code{universo = "muestra_motor"} la fila de cada columna queda \code{estimado}.
+Las columnas \code{estrategia_solicitada}, \code{estrategia_resuelta} y
+\code{estado_estrategia} de \code{resumen_tabla$sql} son las de \code{n_distintos}
+(\code{meta$estrategia_distintos}), repetidas en todas las filas: en la fila de
+la mediana no describen la mediana. Una mediana resuelta por una forma
+exacta queda
 \code{estado = "calculado"} y \code{error_esperado = "no_aplica"}, aunque se haya
 pedido \code{"aproximada_motor"}; sólo una aproximación ejecutada queda
 \code{estado = "estimado"}. \code{universo = "muestra_motor"} combinado con
@@ -135,7 +150,21 @@ el estado \code{no_solicitado} y \code{meta$bloques$filas_vistas = 0}. La segund
 opción no cambia el alcance de esos agregados: eso lo decide \code{universo}.}
 
 \item{max_consultas}{Presupuesto declarado de consultas. Al agotarse, las
-métricas restantes quedan en \code{no_disponible} con ese motivo.}
+métricas restantes quedan en \code{no_disponible} con ese motivo. Cuenta toda
+sentencia que el perfilado manda al motor —la preparación, las lecturas de
+catálogo, el recorrido por bloques y, por el spool de la muestra del
+motor, la preparación que la corrida repite para publicar su plan—, la
+misma cuenta de \code{\link[=plan_perfilado_dbi]{plan_perfilado_dbi()}} y de
+\code{resumen_tabla$meta$consultas$emitidas}. No cuentan las sentencias de la
+guarda de transacción (\code{SAVEPOINT} y, en SQL Server, la pregunta por la
+transacción abierta antes de cada consulta), ni las lecturas de
+\code{pg_stat_statements} de \code{instrumentar}, ni las que algunos controladores
+mandan para contestar \code{DBI::dbGetInfo()} o \code{DBI::dbIsValid()}: duckdb 1.1
+pregunta su versión y manda \verb{SELECT 1}, una o dos veces por corrida. La
+preparación y el recorrido por
+bloques se cuentan pero no se omiten: sin ellos no hay perfil. Con
+\code{max_consultas = attr(plan, "total_maximo")} ninguna métrica queda afuera
+por el presupuesto.}
 
 \item{dialecto}{Capacidad de acotar filas: \code{"auto"} la sondea, y
 \code{"limit"}, \code{"top"}, \code{"fetch_first"}, \code{"rownum"} o \code{"portable"} la
@@ -145,7 +174,9 @@ declaran sin sondeo.}
 las consultas de moda, extremos y mediana, y se limpian esos campos en el
 resumen, la muestra, los bloques, la cobertura y los motivos; también se
 retiran ejemplos de patrones, familias de acumuladores y cualquier muestra
-cruda. Los conteos, proporciones y agregados que no son valores de celda
+cruda. El mensaje de un error del motor, que cita la celda que lo provocó,
+se publica sin sus literales, como con \code{proteger_datos_personales = TRUE}.
+Los conteos, proporciones y agregados que no son valores de celda
 pueden seguir publicándose. La elección queda en
 \code{resumen_tabla$meta$incluir_valores} y \code{perfil_muestra$meta}.}
 
@@ -155,7 +186,9 @@ familias. Para control separado, usar \code{tamano_lote_planos} y
 \code{tamano_lote_distintos}.}
 
 \item{tamano_lote_planos}{Cantidad máxima de columnas por consulta de
-agregados planos. El valor por omisión es 20.}
+agregados planos. En SQL Server y en columnas \code{float8} de PostgreSQL, el
+desvío conserva su cálculo centrado en una segunda pasada del mismo tamaño.
+El valor por omisión es 20.}
 
 \item{tamano_lote_distintos}{Cantidad máxima de columnas por consulta de
 cardinalidades exactas. El valor por omisión es 2, un supuesto del código
@@ -186,30 +219,45 @@ filas por columnas del esquema. Si reduce la muestra,
 \code{Inf} desactiva este tope. No modifica los agregados SQL.}
 
 \item{max_bytes_muestra}{Máximo de bytes de la muestra materializada que
-alimenta \code{perfil_muestra}. Por defecto es \verb{512 MiB}. Como el tamaño no se
-conoce desde el esquema, primero se lee una sonda de hasta cien filas y con
-ella se fija el límite final en SQL o en \code{dbFetch(n)}, antes de leer el
-resto. Si reduce la muestra, \code{cobertura_diagnosticos} informa los bytes
-observados, el umbral y cuál tope mandó. \code{Inf} desactiva este tope. No
-modifica los agregados SQL.}
+alimenta \code{perfil_muestra}. Por defecto es \verb{512 MiB}. En
+\code{muestra_motor}, el límite se cruza con el presupuesto de materialización
+y se respeta antes de cada \code{dbFetch(n)}: cuando la cota de tipos es
+demasiado conservadora se lee una fila inicial, se mide lo que ocupa en la
+materialización y los bloques siguientes se piden con el doble de margen
+sobre la fila más grande medida; el spool nunca pasa el tope. Si reduce la muestra, \code{meta$muestreo},
+\code{meta$materializacion} y \code{cobertura_diagnosticos} informan las filas
+solicitadas, efectivas y cuál tope mandó. \code{meta$muestreo$filas_por_bytes}
+publica la cantidad obtenida de la medicion y
+\code{meta$muestreo$filas_por_bytes_fuente} lo declara. \code{Inf} desactiva este
+tope. No modifica los agregados SQL.}
 
 \item{bloque_filas}{Entero positivo que activa la fuente por
 bloques de \code{tabla_completa}. Cada bloque se obtiene con un unico result
 set (\code{dbSendQuery()} + \code{dbFetch(n = bloque_filas)}) y se absorbe antes de
 liberar la entrada. \code{NULL} conserva el plan historico. El plan publica la
 proyeccion, el orden, los bloques previstos y el costo declarado sin leer
-las filas.}
+las filas. Cuenta la preparación, las pruebas de la fuente, el recorrido, la
+segunda pasada del localizador, la moda exacta de binarios y decimales
+anchos, la media de los decimales en el decimal y la lectura de
+\code{perfil_muestra}; la mediana de un decimal cuyas centrales son dobles
+distintos, su desvío centrado y la moda de un entero leído como doble los
+piden los datos y van al extremo superior.}
 
 \item{max_bytes_procesamiento}{Límite de bytes del estado retenido por el
 procesamiento por bloques y por la lectura del spool en R. Se comprueba
-antes de publicar un bloque o una pasada; \code{Inf} desactiva este límite.}
+antes de publicar un bloque o una pasada; si la materialización cabe pero
+el objeto que R necesita para perfilarla supera el límite, el perfil se
+descarta y se emite el mismo aviso de alcance degradado, con
+\code{tope_que_mando = "procesamiento"}. \code{Inf} desactiva este límite.}
 
 \item{max_bytes_materializacion}{Presupuesto de bytes del spool externo de
 \code{muestra_motor}. Se mide por chunk antes de cada escritura, dejando espacio
 para el trailer; si no alcanza, se publica
-\code{spool_presupuesto_excedido} y
-\code{muestra_inestable:presupuesto_materializacion} sin mezclar una muestra
-parcial con resultados completos. \code{Inf} desactiva este límite.}
+\code{spool_presupuesto_excedido} y se conserva la parte que entró como muestra
+recortada, con \code{muestra_inestable:presupuesto_materializacion}. En
+\code{muestra_motor}, el primer bloque se acota antes de pedirlo y los siguientes
+se adaptan a los bytes medidos; el resultado conserva
+\code{meta$bytes_muestra} y \code{meta$tiempos}. \code{Inf} desactiva este límite.}
 }
 \value{
 Data frame de clase \code{plan_perfilado_dbi} con \code{clase_consulta},
@@ -262,6 +310,17 @@ de lotes puede agregar las sondas de bisección declaradas por
 y el intervalo queda condicionado a que la sonda de la corrida la acepte.
 Si la forma muestreada no se puede construir, el plan declara ese caso,
 excluye sus métricas del rango y \code{attr(plan, "supuesto")} dice por qué.
+El extremo superior incluye además, con \code{universo = "muestra_motor"} y una
+forma \code{TABLESAMPLE}, el reintento del resumen cuando la muestra vuelve con
+menos de la mitad de lo pedido, que depende de las páginas que sortee el
+motor. La cuenta es la de \code{max_consultas} y la de
+\code{resumen_tabla$meta$consultas$emitidas}: toda sentencia que el perfilado
+manda al motor, salvo las de la guarda de transacción, las lecturas de
+\code{pg_stat_statements} de \code{instrumentar} y las que algunos controladores
+mandan para contestar \code{DBI::dbGetInfo()} o \code{DBI::dbIsValid()} (duckdb 1.1,
+una o dos por corrida). Con \code{max_consultas} igual a
+\code{total_maximo} ninguna métrica queda afuera por el presupuesto; con
+\code{total}, sólo las consultas que piden los datos pueden quedar afuera.
 
 Cuántas consultas se emiten no dice cuánto cuestan: catorce consultas
 sobre dos millones de filas son mucho más trabajo que doscientas sobre
@@ -397,6 +456,12 @@ justificar este costo es PostgreSQL 16, 2 millones de filas: 10.000, 100.000
 y 500.000 filas dieron 0,448/1,684/5,598 s con spool frente a
 0,814/2,178/3,265 s reordenando cada pasada; el cruce está entre 100.000 y
 500.000, y la elección prioriza identidad.
+Con el bloque de filas, esa vía no corre los agregados SQL de la muestra: el
+plan cuenta la preparación, la estimación de bytes por fila del catálogo, el
+conteo del universo cuando la preparación no lo hace, la selección de la
+muestra —dos en el extremo superior, si un \code{TABLESAMPLE} corto se reintenta—
+y la preparación que la corrida repite para publicar su plan en
+\code{meta$plan}.
 }
 \examples{
 if (requireNamespace("DBI", quietly = TRUE) &&

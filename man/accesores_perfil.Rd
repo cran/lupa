@@ -29,6 +29,9 @@ sql_perfil(x, ...)
 \code{hallazgos()} devuelve un \code{data.frame} con una fila por hallazgo
 —sobre una colección, los de cada perfil conservado con la identidad de su
 tabla adelante (\code{tabla}, \code{esquema}, \code{identificador}), como \code{sql_perfil()};
+la columna-lista \code{trazabilidad} conserva, en hallazgos que involucran varias
+columnas, el vector original \code{columnas}; \code{columna} sigue siendo el texto
+legible que se muestra y se puede guardar.
 si la colección no conservó los perfiles, una tabla vacía con su aviso—;
 \code{columnas()}, un \code{data.frame} con una fila por columna de la tabla
 perfilada y sus métricas y diagnósticos; \code{cobertura()} devuelve la tabla de
@@ -36,7 +39,9 @@ diagnósticos no evaluados —y, sobre un \code{perfil_dbi}, la de \strong{métr
 SQL}, que es la cobertura de ese objeto: sus diagnósticos no evaluados
 viajan en \code{x$perfil_muestra$cobertura_diagnosticos}, con el esquema de
 \code{\link[=perfilar]{perfilar()}}, y la impresión del perfil los declara—; \code{n_filas()} devuelve el conteo de filas del
-alcance, o un vector con un conteo por tabla para una colección. Devuelve
+alcance, o un vector nombrado con un conteo por tabla para una colección
+—los nombres son los de \code{resumen_coleccion$tabla}, en el orden de la tabla—.
+Devuelve
 \code{NA} con su motivo cuando el objeto no conoce el conteo. El significado de
 cada campo de \code{columnas()} se explica por familias en los detalles de
 \code{\link[=perfilar]{perfilar()}}. \code{sql_perfil()} devuelve la tabla de consultas emitidas;

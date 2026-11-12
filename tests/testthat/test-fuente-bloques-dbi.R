@@ -76,7 +76,7 @@ test_that("La lectura por bloques conserva la identidad de los acumuladores con 
   expect_true(nrow(muchas$resumen_tabla$meta$eventos) >= 4L)
   expect_match(
     muchas$resumen_tabla$meta$nota_inf,
-    "representacion del controlador",
+    "representaci\u00f3n del controlador",
     fixed = TRUE
   )
 })
@@ -145,8 +145,8 @@ test_that("La lectura por bloques inicia el mapa para moda y mediana sin publica
   expect_equal(fila_moda$moda, "1")
   expect_identical(distinto_mediana$estado, "no_solicitado")
   expect_identical(distinto_moda$estado, "no_solicitado")
-  expect_identical(distinto_mediana$motivo, "La metrica no fue solicitada.")
-  expect_identical(distinto_moda$motivo, "La metrica no fue solicitada.")
+  expect_identical(distinto_mediana$motivo, "La m\u00e9trica no fue solicitada.")
+  expect_identical(distinto_moda$motivo, "La m\u00e9trica no fue solicitada.")
 })
 
 test_that("La lectura por bloques distingue mapa truncado del tope de reconstruccion de mediana", {
@@ -213,7 +213,9 @@ test_that("La lectura por bloques registra n, memoria acotada y las dos pasadas 
   expect_match(resultado$meta$orden_muestra$motivo, "no_gobierna_fuente_bloques")
   expect_true(resultado$meta$consultas$emitidas >= 2L)
   expect_true(resultado$meta$consultas$fetches > resultado$meta$bloques$recorridos)
-  expect_equal(resultado$meta$plan$n_consultas, resultado$meta$consultas$emitidas)
+  # El plan publicado es el anunciado, con la preparacion y la muestra; lo
+  # emitido cuenta las mismas consultas.
+  expect_equal(attr(resultado$meta$plan, "total"), resultado$meta$consultas$emitidas)
 })
 
 test_that("el preflight prefiere una clave primaria y publica orden completo", {
@@ -263,9 +265,14 @@ test_that("DuckDB decide la ausencia de dbFetch incremental en el preflight", {
   conexion <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
   on.exit(DBI::dbDisconnect(conexion, shutdown = TRUE), add = TRUE)
   DBI::dbExecute(conexion, "CREATE TABLE duck_i1 AS SELECT * FROM range(4)")
-  resultado <- lupa::perfilar_dbi(
-    conexion, "duck_i1", bloque_filas = 2L,
-    bloque_muestra = "solo_agregados", proteger_datos_personales = FALSE
+  # El perfil queda vacio a proposito, y lo dice con una condicion: antes el
+  # motivo solo estaba en la cobertura.
+  expect_warning(
+    resultado <- lupa::perfilar_dbi(
+      conexion, "duck_i1", bloque_filas = 2L,
+      bloque_muestra = "solo_agregados", proteger_datos_personales = FALSE
+    ),
+    "dbfetch_no_incremental", class = "lupa_aviso_muestra_motor"
   )
   expect_false(resultado$resumen_tabla$meta$fuente_bloques$disponible)
   expect_identical(

@@ -175,7 +175,7 @@ sugerir_clave <- function(datos, maximo = 5L, umbral_casi = 0.95) {
     )),
     motivo = vapply(nombres_repetidos, function(nombre) {
       paste0(
-        "no se midio: hay ", sum(.nombres_para_operar(names(datos)) ==
+        "no se midi\u00f3: hay ", sum(.nombres_para_operar(names(datos)) ==
                                    .nombres_para_operar(nombre)),
         " columnas con este nombre y por nombre no se puede elegir ninguna; ",
         "renombrarlas -por ejemplo con `names(datos) <- make.unique(names(datos))`- ",
@@ -216,7 +216,7 @@ sugerir_clave <- function(datos, maximo = 5L, umbral_casi = 0.95) {
         100 * salida$tasa_distintos[[i]]
       )
     } else {
-      "no identifica: sus valores no repiten, pero no estan en todas las filas"
+      "no identifica: sus valores no repiten, pero no est\u00e1n en todas las filas"
     })
     if (!salida$candidato_por_tipo[[i]]) {
       # No se niega que identifique -eso es un hecho medido-, se dice por que
@@ -254,7 +254,9 @@ sugerir_clave <- function(datos, maximo = 5L, umbral_casi = 0.95) {
 #' Muestra las candidatas de [sugerir_clave()] numeradas, con el motivo de cada
 #' una, y devuelve la que se elija para pasarla al argumento `clave` de
 #' [perfilar()]. La última opción permite escribir un nombre que no esté en la
-#' lista, o varios separados por coma para una clave compuesta.
+#' lista, o varios separados por coma para una clave compuesta. Si un nombre real
+#' contiene una coma, el texto no se puede desambiguar: en ese caso hay que
+#' pasar un vector de nombres, por ejemplo `c("a,b")`, al argumento `clave`.
 #'
 #' **En una sesión no interactiva no pregunta**: devuelve `NULL` y avisa qué
 #' habría ofrecido. Un guion que corre solo no puede quedarse esperando una
@@ -309,10 +311,10 @@ elegir_clave <- function(datos, maximo = 5L, umbral_casi = 0.95) {
     cli::cli_alert_warning(
       "Ninguna columna identifica una fila ni se le acerca."
     )
-    escrita <- readline("Nombre de la clave (vacio para ninguna): ")
+    escrita <- readline("Nombre de la clave (vac\u00edo para ninguna): ")
     return(.clave_escrita(escrita, datos))
   }
-  cli::cli_h2("Cual es la clave de esta tabla?")
+  cli::cli_h2("Cu\u00e1l es la clave de esta tabla?")
   for (i in seq_len(nrow(sugerencias))) {
     cli::cli_text(
       "{i}. {.field {sugerencias_texto$columna[[i]]}} - {sugerencias_texto$motivo[[i]]}"
@@ -321,7 +323,7 @@ elegir_clave <- function(datos, maximo = 5L, umbral_casi = 0.95) {
   otra <- nrow(sugerencias) + 1L
   cli::cli_text("{otra}. Otra (escribirla; separar con coma si son varias)")
   cli::cli_text("0. Ninguna")
-  respuesta <- readline("Numero: ")
+  respuesta <- readline("N\u00famero: ")
   numero <- suppressWarnings(as.integer(trimws(respuesta)))
   if (is.na(numero) || numero < 0L || numero > otra) {
     cli::cli_alert_warning("Respuesta no reconocida; no se declara clave.")
@@ -335,7 +337,18 @@ elegir_clave <- function(datos, maximo = 5L, umbral_casi = 0.95) {
 }
 
 .clave_escrita <- function(texto, datos) {
-  nombres <- trimws(strsplit(as.character(texto), ",", fixed = TRUE)[[1L]])
+  texto <- as.character(texto)
+  if (length(texto) > 1L) {
+    nombres <- texto
+  } else {
+    nombres <- .separar_nombres_columnas(texto, names(datos))
+    if (isTRUE(attr(nombres, "ambigua", exact = TRUE))) {
+      cli::cli_alert_warning(.cli_literal(
+        "El texto separa nombres de forma ambigua; pasar un vector de columnas."
+      ))
+      return(NULL)
+    }
+  }
   nombres <- nombres[nzchar(nombres)]
   if (!length(nombres)) return(NULL)
   indices <- .indice_nombre(nombres, names(datos))

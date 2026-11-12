@@ -9,14 +9,15 @@
 # Jaro-Winkler y las distancias de edicion fueron concebidas para nombres,
 # direcciones e identificadores, no para documentos.
 #
-# El motivo NO es que la metrica pierda discriminacion: medido, el cociente
-# entre 500 ediciones y 1 edicion se mantiene en unos 480 con largos de 1.000,
-# 10.000 y 25.000 caracteres. Lo que cambia es la ESCALA ABSOLUTA. Con 25.000
-# caracteres, 500 ediciones -un parrafo reescrito- dan una distancia normalizada
-# de 0,019, por debajo de cualquier umbral usable, asi que dos documentos que un
-# lector considera distintos quedan del lado de los casi-duplicados. La metrica
-# es invariante ante diferencias PROPORCIONALES y deja de servir ante diferencias
-# de tamano FIJO, que son las que ocurren en textos largos.
+# El motivo NO es que la metrica pierda discriminacion: el benchmark
+# `medir_topes_valores_ancho.R` mide el mismo `p` que la funcion. Lo que cambia
+# es la ESCALA ABSOLUTA: con 1.000 cambios, la mediana pasa de 0,116 a 10.000
+# caracteres a 0,063 a 25.000, y cruza el umbral 0,10 entre 15.000 y 20.000.
+# Por eso el tope predeterminado de 10.000 deja un margen de 5.000 caracteres
+# hasta el primer largo probado por debajo del umbral, no el margen mayor que se
+# publicaba con otra configuracion de Jaro-Winkler. La metrica es invariante
+# ante diferencias PROPORCIONALES y deja de servir ante diferencias de tamano
+# FIJO, que son las que ocurren en textos largos.
 #
 # Y esta el costo, que es el motivo principal: con valores de 20 KB la matriz de
 # distancias se lleva el 69 % del perfilado, y 2.000 filas de 200 KB tardan
@@ -46,7 +47,7 @@
     valores[is.na(valores)] <- ""
     valores <- .normalizacion_aplicar(valores, normalizacion)
   }
-  largos <- nchar(valores, type = "chars", allowNA = TRUE)
+  largos <- .nchar_texto_seguro(valores)
   largos <- largos[is.finite(largos)]
   if (!length(largos)) 0 else max(largos)
 }
@@ -62,7 +63,7 @@
   if (!is.null(normalizacion)) {
     valores <- .normalizacion_aplicar(valores, normalizacion)
   }
-  largos <- nchar(valores, type = "chars", allowNA = TRUE)
+  largos <- .nchar_texto_seguro(valores)
   largos[!is.finite(largos)] <- 0
   largos
 }
@@ -126,6 +127,18 @@
 
 .matriz_distancias_duplicados <- function(a, b, metodo, nucleos, p = 0.1) {
   stringdist::stringdistmatrix(a, b, method = metodo, p = p, nthread = nucleos)
+}
+
+# Si la tesela diagonal puede calcular solo su triangulo superior con
+# `stringdist()` par a par y dar lo mismo que la celda de `stringdistmatrix()`.
+# Medido con stringdist 0.9.17, bit a bit, sobre los diez metodos que acepta el
+# paquete, con 1, 2 y 4 hilos, textos vacios, `NA`, `latin1`, valores de 3.000
+# caracteres y caracteres fuera del plano basico: coinciden todos menos
+# `jaccard` entre dos textos vacios, donde la matriz da `0` y el par da `NaN`
+# -y no siempre: depende del par y de los hilos-. Un `NaN` no pasa el umbral y
+# el par desapareceria, asi que `jaccard` sigue con la matriz entera.
+.triangulo_identico_duplicados <- function(metodo) {
+  !identical(metodo, "jaccard")
 }
 
 .nucleos_disponibles_lupa <- function() {
@@ -257,7 +270,7 @@
   }
   x <- names(datos)[[.indice_nombre(x, names(datos))]]
   if (.es_columna_compuesta(datos[[x]]) || is.list(datos[[x]])) {
-    .detener("`bloquear_por` debe nombrar una columna atomica.", call. = FALSE)
+    .detener("`bloquear_por` debe nombrar una columna at\u00f3mica.", call. = FALSE)
   }
   x
 }
@@ -288,7 +301,7 @@
   if (isTRUE(interactive())) {
     respuesta <- readline(paste0(
       "La estimaci\u00f3n exacta es de ", .formato_pares_lsh(estimados),
-      " pares (presupuesto ", .formato_pares_lsh(presupuesto),
+      if (estimados == 1L) " par (presupuesto " else " pares (presupuesto ", .formato_pares_lsh(presupuesto),
       "). \u00bfContinuar? [s/N] "
     ))
     continuar <- .minusculas_para_comparar(respuesta) %in% c(
@@ -298,10 +311,10 @@
   if (!continuar) {
     .detener(
       "La estimaci\u00f3n exacta (", .formato_pares_lsh(estimados),
-      " pares) supera `presupuesto_pares` (",
+      if (estimados == 1L) " par) supera `presupuesto_pares` (" else " pares) supera `presupuesto_pares` (",
       .formato_pares_lsh(presupuesto),
-      "). No se inici\u00f3 la comparaci\u00f3n; aumente el presupuesto, reduzca los datos, ",
-      "suba el umbral o divida el conjunto por una clave.",
+      "). No se inici\u00f3 la comparaci\u00f3n; aumentar el presupuesto, reducir los datos, ",
+      "subir el umbral o dividir el conjunto por una clave.",
       call. = FALSE
     )
   }
@@ -601,11 +614,22 @@
 #' La matriz de distancias de cada tesela se descarta antes de pasar a la
 #' siguiente. Así la memoria temporal depende de `bloque`, no de la cantidad
 #' total de filas, sin cambiar qué pares se comparan.
+#'
+#' En la tesela diagonal se calcula sólo el triángulo superior, que es lo
+#' único que esa tesela entrega, salvo con `jaccard` (ver
+#' `.triangulo_identico_duplicados()`). Con `solo_pares = TRUE` el llamador
+#' consume los pares únicamente por `on_pairs` y no lee el valor devuelto: no se
+#' arma el acumulador. Los pares, su orden y sus distancias son los mismos.
 #' @noRd
 .comparar_bloques_duplicados <- function(
     valores, filas, metodo, umbral, bloque, max_resultados,
     acumulador = NULL, on_pairs = NULL, bloqueos = NULL, nucleos = 2L,
-    p = 0.1, igualdad_original = NULL) {
+    p = 0.1, igualdad_original = NULL, solo_pares = FALSE) {
+  if (isTRUE(solo_pares)) {
+    return(.comparar_bloques_solo_pares(
+      valores, filas, metodo, umbral, bloque, on_pairs, bloqueos, nucleos, p
+    ))
+  }
   n <- length(valores)
   acumular_en_externo <- !is.null(acumulador)
   if (is.null(acumulador)) {
@@ -637,20 +661,41 @@
     for (j in i:length(inicios)) {
       fin_j <- min(n, inicios[[j]] + bloque - 1L)
       filas_j <- inicios[[j]]:fin_j
-      matriz <- as.matrix(.matriz_distancias_duplicados(
-        valores[filas_i], valores[filas_j], metodo, nucleos, p
-      ))
       n_bloques <- n_bloques + 1L
-      candidatas <- if (i == j) {
-        which(upper.tri(matriz) & matriz >= 0 & matriz <= umbral,
-              arr.ind = TRUE)
+      if (i == j && .triangulo_identico_duplicados(metodo)) {
+        # La tesela diagonal entrega solo su triangulo superior, y la matriz
+        # entera calculaba el doble. Se recorre ese triangulo columna por
+        # columna, que es el orden de `which(upper.tri(m), arr.ind = TRUE)`, y
+        # `stringdist()` sobre cada par da la misma celda, bit a bit, que
+        # `stringdistmatrix()`: los pares, su orden y sus distancias no cambian.
+        k <- length(filas_i)
+        if (k < 2L) next
+        columna <- rep.int(2:k, 1:(k - 1L))
+        fila <- sequence(1:(k - 1L))
+        valores_i <- valores[filas_i]
+        triangulo <- .distancias_pares_duplicados(
+          valores_i[fila], valores_i[columna], metodo, nucleos, p
+        )
+        seleccion <- which(triangulo >= 0 & triangulo <= umbral)
+        if (!length(seleccion)) next
+        distancias <- as.numeric(triangulo[seleccion])
+        posiciones_1 <- filas_i[fila[seleccion]]
+        posiciones_2 <- filas_i[columna[seleccion]]
       } else {
-        which(matriz >= 0 & matriz <= umbral, arr.ind = TRUE)
+        matriz <- as.matrix(.matriz_distancias_duplicados(
+          valores[filas_i], valores[filas_j], metodo, nucleos, p
+        ))
+        candidatas <- if (i == j) {
+          which(upper.tri(matriz) & matriz >= 0 & matriz <= umbral,
+                arr.ind = TRUE)
+        } else {
+          which(matriz >= 0 & matriz <= umbral, arr.ind = TRUE)
+        }
+        if (!nrow(candidatas)) next
+        distancias <- as.numeric(matriz[candidatas])
+        posiciones_1 <- filas_i[candidatas[, 1L]]
+        posiciones_2 <- filas_j[candidatas[, 2L]]
       }
-      if (!nrow(candidatas)) next
-      distancias <- as.numeric(matriz[candidatas])
-      posiciones_1 <- filas_i[candidatas[, 1L]]
-      posiciones_2 <- filas_j[candidatas[, 2L]]
       f1 <- filas[posiciones_1]
       f2 <- filas[posiciones_2]
       iguales <- valores[posiciones_1] == valores[posiciones_2]
@@ -687,6 +732,85 @@
     n_aproximados = acumulador$n_aproximados, n_bloques = n_bloques,
     acumulador = acumulador
   )
+}
+
+# El detector de vocabulario consume cada par por `on_pairs` y tira lo que
+# `.comparar_bloques_duplicados()` devuelve. Armar igual el acumulador -un
+# `data.frame` por tesela, ordenado y recortado a un solo par- y la matriz
+# entera de la tesela diagonal, de la que se usa la mitad, costaba casi un
+# tercio del detector sobre una columna de codigos: medido con 500 codigos por
+# columna y 300 columnas, 0,094 s por columna, de los que 0,013 eran el
+# acumulador y 0,017 la mitad de la matriz que nadie lee.
+#
+# Los pares que se entregan, su orden y sus distancias no cambian: en la tesela
+# diagonal se recorre el triangulo superior columna por columna, que es el orden
+# de `which(upper.tri(m), arr.ind = TRUE)`, y `stringdist()` sobre el par da el
+# mismo numero que la celda de `stringdistmatrix()`.
+.comparar_bloques_solo_pares <- function(valores, filas, metodo, umbral,
+                                         bloque, on_pairs, bloqueos,
+                                         nucleos, p) {
+  if (!is.function(on_pairs)) {
+    .detener("`solo_pares = TRUE` necesita `on_pairs`.", call. = FALSE)
+  }
+  n <- length(valores)
+  n_bloques <- 0L
+  if (n < 2L) return(invisible(list(n_bloques = n_bloques)))
+  entregar <- function(posiciones_1, posiciones_2, distancias) {
+    f1 <- filas[posiciones_1]
+    f2 <- filas[posiciones_2]
+    if (!is.null(bloqueos)) {
+      dentro <- bloqueos[posiciones_1] == bloqueos[posiciones_2]
+      f1 <- f1[dentro]
+      f2 <- f2[dentro]
+      distancias <- distancias[dentro]
+    }
+    if (length(f1)) on_pairs(f1, f2, distancias)
+    invisible(NULL)
+  }
+  inicios <- seq.int(1L, n, by = bloque)
+  for (i in seq_along(inicios)) {
+    fin_i <- min(n, inicios[[i]] + bloque - 1L)
+    filas_i <- inicios[[i]]:fin_i
+    for (j in i:length(inicios)) {
+      n_bloques <- n_bloques + 1L
+      if (i == j && .triangulo_identico_duplicados(metodo)) {
+        k <- length(filas_i)
+        if (k < 2L) next
+        columna <- rep.int(2:k, 1:(k - 1L))
+        fila <- sequence(1:(k - 1L))
+        valores_i <- valores[filas_i]
+        distancias <- .distancias_pares_duplicados(
+          valores_i[fila], valores_i[columna], metodo, nucleos, p
+        )
+        candidatas <- which(distancias >= 0 & distancias <= umbral)
+        if (!length(candidatas)) next
+        entregar(
+          filas_i[fila[candidatas]], filas_i[columna[candidatas]],
+          as.numeric(distancias[candidatas])
+        )
+      } else {
+        fin_j <- min(n, inicios[[j]] + bloque - 1L)
+        filas_j <- inicios[[j]]:fin_j
+        matriz <- as.matrix(.matriz_distancias_duplicados(
+          valores[filas_i], valores[filas_j], metodo, nucleos, p
+        ))
+        # Una tesela diagonal llega aca solo con un metodo cuyo triangulo par
+        # a par no coincide con la matriz (`.triangulo_identico_duplicados()`).
+        candidatas <- if (i == j) {
+          which(upper.tri(matriz) & matriz >= 0 & matriz <= umbral,
+                arr.ind = TRUE)
+        } else {
+          which(matriz >= 0 & matriz <= umbral, arr.ind = TRUE)
+        }
+        if (!nrow(candidatas)) next
+        entregar(
+          filas_i[candidatas[, 1L]], filas_j[candidatas[, 2L]],
+          as.numeric(matriz[candidatas])
+        )
+      }
+    }
+  }
+  invisible(list(n_bloques = n_bloques))
 }
 
 .preparar_directorio_lotes <- function(directorio_lotes) {
@@ -857,7 +981,7 @@
   lapply(seq_along(x), function(i) {
     texto <- x[[i]]
     if (!nzchar(texto)) return(character())
-    largo <- nchar(texto, type = "chars")
+    largo <- .nchar_texto_seguro(texto)[[1L]]
     if (largo < q) return(texto)
     unique(substring(texto, seq_len(largo - q + 1L),
                      seq_len(largo - q + 1L) + q - 1L))
@@ -880,7 +1004,7 @@
 
 .ids_qgramas_por_bloques <- function(valores, q, bloque = 10000L) {
   n <- length(valores)
-  largos_maximos <- pmax(nchar(valores, type = "chars") - q + 1L, 1L)
+  largos_maximos <- pmax(.nchar_texto_seguro(valores) - q + 1L, 1L)
   maximo <- if (n) max(largos_maximos) else 1L
   ids <- matrix(0L, nrow = n, ncol = maximo)
   vocabulario <- character()
@@ -1076,9 +1200,12 @@
       " candidatos previstos; referencia de ",
       format(round(estimacion$tiempo, 3), nsmall = 3,
         decimal.mark = ","),
-      " s (piso, no incluye firma ni cubetas; subir nucleos puede acortar ",
-      "esta etapa; hoy usa ", nucleos, " hilos), medida con ",
-      .formato_pares_lsh(estimacion$pares_benchmark), " pares en ",
+      " s (referencia de la comparaci\u00f3n aislada; no incluye firma ni cubetas; ",
+      "subir nucleos puede acortar ",
+      "esta etapa; hoy usa ", nucleos,
+      if (nucleos == 1L) " hilo), medida con " else " hilos), medida con ",
+      .formato_pares_lsh(estimacion$pares_benchmark),
+      if (estimacion$pares_benchmark == 1L) " par en " else " pares en ",
       format(round(estimacion$tiempo_benchmark, 3), nsmall = 3,
         decimal.mark = ","), " s."
     )
@@ -1087,7 +1214,8 @@
       "LSH: no se pudo medir una velocidad con ",
       .formato_pares_lsh(estimacion$pares_benchmark),
       " pares; el tiempo queda sin estimar (subir nucleos puede acortar ",
-      "esta etapa; hoy usa ", nucleos, " hilos)."
+      "esta etapa; hoy usa ", nucleos,
+      if (nucleos == 1L) " hilo)." else " hilos)."
     )
   }
 }
@@ -1576,7 +1704,7 @@
       candidatas <- structure(
         character(),
         motivo_sin_columnas = paste0(
-          "Hay ", length(candidatas), " columnas de texto; indique `columnas` ",
+          "Hay ", length(candidatas), " columnas de texto; indicar `columnas` ",
           "para evitar combinar campos que pueden diluir la similitud."
         )
       )
@@ -1590,7 +1718,7 @@
       anyNA(columnas) || any(!nzchar(columnas)) ||
       length(indices) != length(columnas) || anyNA(indices) ||
       anyDuplicated(indices)) {
-    .detener("`columnas` debe nombrar columnas atomicas existentes y sin repetir.",
+    .detener("`columnas` debe nombrar columnas at\u00f3micas existentes y sin repetir.",
          call. = FALSE)
   }
   columnas <- names(datos)[indices]
@@ -1889,11 +2017,11 @@
   }
   if (!is.numeric(umbral) || length(umbral) != 1L || is.na(umbral) ||
       !is.finite(umbral) || umbral < 0) {
-    .detener("`umbral` debe ser un numero finito no negativo.", call. = FALSE)
+    .detener("`umbral` debe ser un n\u00famero finito no negativo.", call. = FALSE)
   }
   if (!is.numeric(p) || length(p) != 1L || is.na(p) || !is.finite(p) ||
       p < 0 || p > 0.25) {
-    .detener("`p` debe ser un numero finito entre 0 y 0.25.", call. = FALSE)
+    .detener("`p` debe ser un n\u00famero finito entre 0 y 0.25.", call. = FALSE)
   }
   .validar_bandera_proteccion(proteger_datos_personales)
   largos <- .columnas_largas_duplicados(
@@ -1903,7 +2031,7 @@
     motivo <- paste0(
       "Se excluyeron las columnas ",
       paste0("`", largos$columnas, "`", collapse = ", "),
-      " de la comparacion: al menos un valor supera `max_largo_valor = ",
+      " de la comparaci\u00f3n: al menos un valor supera `max_largo_valor = ",
       max_largo_valor, "` caracteres. Como las columnas se comparan juntas,",
       " no se compararon sus filas; no se recortaron valores en silencio."
     )
@@ -1926,7 +2054,7 @@
     resultado <- .vacio_duplicados_aproximados(
       nrow(datos), columnas, metodo, umbral, muestra, max_pares,
       max_resultados, disponible = FALSE, bloque = bloque, p = p,
-      razon = "No esta instalado el paquete opcional 'stringdist'.",
+      razon = "No est\u00e1 instalado el paquete opcional 'stringdist'.",
       nucleos_usados = nucleos, max_largo_valor = max_largo_valor
     )
     if (!is.null(resumen_bloqueo)) {
@@ -1955,10 +2083,10 @@
     motivo <- paste0(
       "Hay columnas de texto con el mismo nombre (",
       paste0("`", nombres_repetidos, "`", collapse = ", "),
-      "): la comparacion identifica las columnas por nombre, asi que no se puede ",
-      "decir cual de ellas se compara. No se compararon sus filas. Renombre las ",
+      "): la comparaci\u00f3n identifica las columnas por nombre, as\u00ed que no se puede ",
+      "decir cu\u00e1l de ellas se compara. No se compararon sus filas. Renombrar las ",
       "repetidas -por ejemplo con `names(datos) <- make.unique(names(datos))`- y ",
-      "vuelva a comparar."
+      "volver a comparar."
     )
     resultado <- .vacio_duplicados_aproximados(
       nrow(datos), columnas, metodo, umbral, muestra, max_pares,
@@ -1975,7 +2103,7 @@
   if (!length(columnas)) {
     motivo <- attr(columnas, "motivo_sin_columnas", exact = TRUE)
     if (is.null(motivo)) {
-      motivo <- "No hay columnas de texto comparables; indique `columnas` explicitamente."
+      motivo <- "No hay columnas de texto comparables; indicar `columnas` expl\u00edcitamente."
     }
     resultado <- .vacio_duplicados_aproximados(
       nrow(datos), columnas, metodo, umbral, muestra, max_pares,
@@ -1992,11 +2120,11 @@
   # La clasificacion solo sirve para saber que proteger: sin proteccion no se
   # perfila la tabla para buscarla.
   if (is.null(clasificacion) && proteger_datos_personales) {
-    perfil <- perfilar(
+    perfil <- suppressWarnings(perfilar(
       datos, analizar_dependencias = FALSE,
       proteger_datos_personales = TRUE,
       duplicados_aproximados = FALSE
-    )
+    ))
     clasificacion <- perfil$datos_personales
   }
   protegidas <- if (proteger_datos_personales) {
@@ -2306,7 +2434,7 @@
         pares$evidencia_1, " / ", pares$evidencia_2
       ),
       sugerencia = rep(
-        "Revisar manualmente; no eliminar ni fusionar filas por esta senal.", n
+        "Revisar manualmente; no eliminar ni fusionar filas por esta se\u00f1al.", n
       ),
       n_evaluados = rep(n_pares_comparados, n),
       n_afectados = rep(1, n),
@@ -2333,7 +2461,9 @@
       "El bloqueo excluye pares cuya clave no coincide; no se evaluaron.",
       paste0(
         resumen_bloqueo$alcance$bloqueo_pares_fuera_alcance[[1L]],
-        " pares quedaron fuera del alcance de `bloquear_por`.",
+        if (resumen_bloqueo$alcance$bloqueo_pares_fuera_alcance[[1L]] == 1L) {
+          " par qued\u00f3 fuera del alcance de `bloquear_por`."
+        } else " pares quedaron fuera del alcance de `bloquear_por`.",
         " Las filas con NA forman un bloque propio."
       ),
       "Revisar la clave y no interpretar la ausencia de un par como evidencia de que no existe.",
@@ -2565,8 +2695,11 @@
 #' El aviso interactivo señala esta perilla: subir `nucleos` puede acortar la
 #' etapa de comparación, pero la ganancia depende de la máquina y de los datos.
 #'
-#' Para tablas que superan el tope exhaustivo, `estrategia = "auto"` usa
-#' MinHash con bandas LSH sobre todas las filas cuando `muestra = Inf`. La
+#' `estrategia = "auto"` usa MinHash con bandas LSH sobre todas las filas
+#' exactamente cuando se cumplen estas tres condiciones: hay más de 10.000
+#' filas, `muestra = Inf` y `max_pares` es `Inf` o es mayor o igual que
+#' 50.000.000. Si falla cualquiera de ellas, conserva el camino exacto por
+#' teselas o el muestreado que corresponda. La
 #' salida declara las bandas, las filas por banda, las cubetas descartadas y la
 #' probabilidad teorica de colision. Esa probabilidad se refiere al Jaccard de
 #' los q-gramas, no a la medida final (`metodo`). `estrategia = "lsh"` fuerza
@@ -2589,9 +2722,9 @@
 #' esos q-gramas. Antes de recorrer las bandas se toma una muestra interna y se
 #' publica una estimación reproducible de candidatos. El cronómetro de la medida
 #' se ejecuta durante al menos 50 ms y queda en `resultado$estimacion`, separado
-#' de `alcance` y marcado como no determinista. Es un piso de la medida aislada
-#' y no estima la firma, las cubetas ni el troceo; sólo se muestra como aviso en
-#' una sesión interactiva.
+#' de `alcance` y marcado como no determinista. Es una referencia de la medida
+#' aislada y no estima la firma, las cubetas ni el troceo; sólo se muestra como
+#' aviso en una sesión interactiva.
 #' Fuera de una sesión interactiva se señala una condición silenciosa de clase
 #' `lupa_tiempo_lsh`, sólo en el camino LSH: no se imprime en `stdout` ni
 #' `stderr`. Se puede capturar con
@@ -2730,9 +2863,11 @@
 #'   reemplaza por `[valor protegido]`. La supresion queda indicada en cada par.
 #'   `FALSE` por omision.
 #' @param estrategia Estrategia de comparación: `"auto"` (por omisión),
-#'   `"teselas"`, `"muestra"` o `"lsh"`. MinHash/LSH sólo se activa
-#'   automáticamente por encima del tope exhaustivo; se puede forzar con
-#'   `"lsh"`.
+#'   `"teselas"`, `"muestra"` o `"lsh"`. Con `"auto"`, MinHash/LSH
+#'   se activa exactamente cuando hay más de 10.000 filas, `muestra = Inf` y
+#'   `max_pares` es `Inf` o es mayor o igual que 50.000.000. Si falla
+#'   cualquiera de esas condiciones, se conserva el camino exacto por teselas o el
+#'   muestreado que corresponda; `"lsh"` lo fuerza.
 #' @param lsh_bandas Número de bandas del esquema LSH. Por defecto, 12.
 #' @param lsh_filas Número de filas de firma por banda. Por defecto, 3.
 #' @param lsh_q Longitud de los q-gramas usados para MinHash. Por defecto, 3.
@@ -2771,7 +2906,7 @@
 #'   `estimacion`. `alcance` es reproducible; en el camino LSH,
 #'   `estimacion$tiempo_determinista` es `FALSE` y reúne la velocidad, duración
 #'   y tiempo de referencia medidos en esa corrida. El campo
-#'   `estimacion$tiempo_estimado_etapa` indica que ese piso cubre sólo la
+#'   `estimacion$tiempo_estimado_etapa` indica que esa referencia cubre sólo la
 #'   comparación `stringdist`, no la firma, las cubetas ni el troceo. En el camino exacto o cuando
 #'   no se puede comparar, `estimacion` es `NULL`. Si `lotes = TRUE`, se agrega
 #'   `lotes` con el directorio, los archivos RDS, sus tamaños, el estado de
@@ -2850,8 +2985,8 @@ detectar_duplicados_aproximados <- function(
 #' `alcance` reproducible en `detectar_duplicados_aproximados()`.
 #'
 #' En el camino LSH, `candidatos_previstos` es una estimación reproducible a
-#' partir de una muestra de firmas. `tiempo_estimado_segundos` es un piso de la
-#' medida aislada y no incluye firmas, cubetas ni troceo; sus campos de reloj
+#' partir de una muestra de firmas. `tiempo_estimado_segundos` es una referencia
+#' de la medida aislada y no incluye firmas, cubetas ni troceo; sus campos de reloj
 #' tienen `tiempo_determinista = FALSE`. Con `bloquear_por`, los pares entre
 #' bloques no entran en el pronóstico y la pérdida estructural y estimada queda
 #' en `alcance`. En el camino exacto, `candidatos_previstos` es la cantidad de

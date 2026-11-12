@@ -11,10 +11,10 @@ print.perfil <- function(x, ...) {
   } else 0L
 
   cli::cli_h1(.cli_literal(paste("Perfil de datos:", x$meta$nombre)))
-  cli::cli_alert_danger(.cli_literal(paste(errores, "hallazgos con severidad error")))
-  cli::cli_alert_warning(.cli_literal(paste(sospechosos, "hallazgos sospechosos")))
-  cli::cli_alert_success(.cli_literal(paste(correctos, "hallazgos informativos ok")))
-  cli::cli_alert_info(.cli_literal(paste(no_evaluados, "diagn\u00f3sticos no evaluados")))
+  cli::cli_alert_danger(.cli_literal(paste(errores, if (errores == 1L) "hallazgo con severidad error" else "hallazgos con severidad error")))
+  cli::cli_alert_warning(.cli_literal(paste(sospechosos, if (sospechosos == 1L) "hallazgo sospechoso" else "hallazgos sospechosos")))
+  cli::cli_alert_success(.cli_literal(paste(correctos, if (correctos == 1L) "hallazgo informativo ok" else "hallazgos informativos ok")))
+  cli::cli_alert_info(.cli_literal(paste(no_evaluados, if (no_evaluados == 1L) "diagn\u00f3stico no evaluado" else "diagn\u00f3sticos no evaluados")))
   # Lo que se midio sobre la muestra se dice aca, donde se lee el veredicto: un
   # "0 hallazgos sospechosos" sobre 10 de 10.000 filas no es lo mismo que sobre
   # la tabla, y la consola no lo mencionaba en ninguna parte.
@@ -22,12 +22,14 @@ print.perfil <- function(x, ...) {
   if (isTRUE(original$meta$muestreo) && length(analizadas) == 1L &&
       is.finite(analizadas) && analizadas < original$general$filas) {
     cli::cli_alert_info(.cli_literal(paste0(
-      "Patrones, tipos, formatos de fecha y dependencias sobre una muestra de ",
+      "Patrones, tipos y formatos de fecha sobre una muestra de ",
       format(analizadas, big.mark = ".", decimal.mark = ",", scientific = FALSE),
       " de ",
       format(original$general$filas, big.mark = ".", decimal.mark = ",",
              scientific = FALSE),
-      " filas: sus conteos son de la muestra"
+      if (original$general$filas == 1L) " fila: sus conteos son de la muestra" else
+        " filas: sus conteos son de la muestra",
+      .nota_consola_dependencias(original$dependencias)
     )))
   }
 
@@ -170,7 +172,7 @@ as_tibble.perfil <- function(x, ...) {
   perfiles <- x$perfiles
   if (!length(perfiles)) {
     .avisar(
-      "Esta coleccion no conservo los perfiles de sus tablas, asi que no hay ",
+      "Esta colecci\u00f3n no conserv\u00f3 los perfiles de sus tablas, as\u00ed que no hay ",
       "hallazgos por fila. Se conservan con perfilar_coleccion(..., ",
       "conservar_perfiles = TRUE); el resumen por tabla sigue en columnas() y ",
       "lo no evaluado, en cobertura().", call. = FALSE
@@ -192,10 +194,10 @@ as_tibble.perfil <- function(x, ...) {
   }
   if (length(sin_muestra)) {
     .avisar(
-      "Sin muestra leida no hay hallazgos por fila de ",
+      "Sin muestra le\u00edda no hay hallazgos por fila de ",
       if (length(sin_muestra) == 1L) "la tabla " else "las tablas ",
       paste(sin_muestra, collapse = ", "),
-      "; el motivo esta en cobertura().", call. = FALSE
+      "; el motivo est\u00e1 en cobertura().", call. = FALSE
     )
   }
   if (!length(partes)) return(vacia())
@@ -273,6 +275,9 @@ as_tibble.perfil <- function(x, ...) {
 #' @return `hallazgos()` devuelve un `data.frame` con una fila por hallazgo
 #'   —sobre una colección, los de cada perfil conservado con la identidad de su
 #'   tabla adelante (`tabla`, `esquema`, `identificador`), como `sql_perfil()`;
+#'   la columna-lista `trazabilidad` conserva, en hallazgos que involucran varias
+#'   columnas, el vector original `columnas`; `columna` sigue siendo el texto
+#'   legible que se muestra y se puede guardar.
 #'   si la colección no conservó los perfiles, una tabla vacía con su aviso—;
 #'   `columnas()`, un `data.frame` con una fila por columna de la tabla
 #'   perfilada y sus métricas y diagnósticos; `cobertura()` devuelve la tabla de
@@ -280,7 +285,9 @@ as_tibble.perfil <- function(x, ...) {
 #'   SQL**, que es la cobertura de ese objeto: sus diagnósticos no evaluados
 #'   viajan en `x$perfil_muestra$cobertura_diagnosticos`, con el esquema de
 #'   [perfilar()], y la impresión del perfil los declara—; `n_filas()` devuelve el conteo de filas del
-#'   alcance, o un vector con un conteo por tabla para una colección. Devuelve
+#'   alcance, o un vector nombrado con un conteo por tabla para una colección
+#'   —los nombres son los de `resumen_coleccion$tabla`, en el orden de la tabla—.
+#'   Devuelve
 #'   `NA` con su motivo cuando el objeto no conoce el conteo. El significado de
 #'   cada campo de `columnas()` se explica por familias en los detalles de
 #'   [perfilar()]. `sql_perfil()` devuelve la tabla de consultas emitidas;
@@ -302,13 +309,13 @@ hallazgos <- function(x, ...) {
     if (inherits(x, "perfil_dbi")) {
       if (identical(.estado_bloque_muestra_dbi(x), "no_solicitado")) {
         .avisar(
-          "Este perfil DBI no solicito la muestra, asi que no hay hallazgos por ",
+          "Este perfil DBI no solicit\u00f3 la muestra, as\u00ed que no hay hallazgos por ",
           "fila. El resumen por columna sigue disponible en columnas(); el ",
           "detalle, en cobertura().", call. = FALSE
         )
       } else {
         .avisar(
-          "Este perfil DBI no trae muestra leida, asi que no hay hallazgos por ",
+          "Este perfil DBI no trae muestra le\u00edda, as\u00ed que no hay hallazgos por ",
           "fila. El resumen por columna sigue disponible en columnas(); el ",
           "motivo, en cobertura().", call. = FALSE
         )
@@ -353,7 +360,10 @@ n_filas <- function(x, ...) {
   if (inherits(x, "perfil_coleccion")) {
     # Una coleccion tiene un conteo por tabla, no un total de una relacion
     # unica. Devolver el vector conserva el dato sin inventar una suma.
-    return(as.numeric(x$resumen_coleccion$n_filas))
+    resumen <- x$resumen_coleccion
+    return(stats::setNames(
+      as.numeric(resumen$n_filas), as.character(resumen$tabla)
+    ))
   }
   NA_real_
 }
@@ -367,4 +377,22 @@ sql_perfil <- function(x, ...) {
   # Un perfil en memoria no emitio SQL, y decirlo con una tabla vacia seria
   # sugerir que emitio y no encontro.
   NULL
+}
+
+# Las dependencias se buscan en la muestra y las publicadas se recalculan sobre la
+# tabla (`detectar_dependencias()`): sus cifras ya no son de la muestra. Un perfil
+# guardado antes del recalculo no trae el atributo y sus cifras si lo son.
+.nota_consola_dependencias <- function(dependencias) {
+  verificadas <- attr(dependencias, "verificadas_tabla_completa", exact = TRUE)
+  if (is.null(verificadas)) {
+    return(if (isTRUE(attr(dependencias, "muestreado", exact = TRUE))) {
+      "; las dependencias, tambi\u00e9n"
+    } else "")
+  }
+  sin_verificar <- sum(!verificadas)
+  paste0(
+    "; las dependencias se buscaron en ella y las publicadas se recalcularon ",
+    "sobre la tabla entera",
+    if (sin_verificar) paste0(", salvo ", sin_verificar) else ""
+  )
 }

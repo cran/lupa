@@ -51,7 +51,7 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
     if (inherits(x, "perfil_dbi")) {
       .detener(
         "`", nombre, "` es un objeto de `perfilar_dbi()`: para comparar dos ",
-        "entregas pase su perfil de muestra, `", nombre, "$perfil_muestra`. ",
+        "entregas: pasar su perfil de muestra, `", nombre, "$perfil_muestra`. ",
         "El resumen SQL de la tabla completa no es un perfil.",
         call. = FALSE
       )
@@ -826,9 +826,14 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
 # `duplicados_exactos_columnas` y una `relacion_aritmetica_columnas`
 # desaparecian sin rastro. Ahora se descarta
 # solo si el texto nombra una columna retirada, entera o como una de sus partes.
-.hallazgo_nombra_columna_retirada <- function(columna, retiradas) {
+.hallazgo_nombra_columna_retirada <- function(columna, retiradas,
+                                             columnas = NULL) {
   retiradas_originales <- as.character(retiradas)
   columna_original <- as.character(columna)
+  if (length(columnas)) {
+    return(any(.nombres_para_operar(columnas) %in%
+               .nombres_para_operar(retiradas_originales)))
+  }
   # Una coma puede ser parte del nombre real de una columna. La coincidencia
   # exacta se resuelve antes de interpretar el texto como una lista de columnas.
   if (length(columna_original) == 1L && !is.na(columna_original) &&
@@ -845,10 +850,14 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
   if (any(vapply(retiradas_originales, function(nombre) {
     nombre <- .nombres_para_operar(nombre)
     startsWith(texto, paste0(nombre, ",")) ||
-      endsWith(texto, paste0(",", nombre))
+      endsWith(texto, paste0(",", nombre)) ||
+      grepl(paste0(",", nombre, ","), texto, fixed = TRUE)
   }, logical(1L)))) return(TRUE)
-  partes <- trimws(strsplit(texto, ",", fixed = TRUE)[[1L]])
-  any(partes %in% retiradas)
+  partes_historicas <- .separar_nombres_columnas_historico(
+    columna_original, sep = ","
+  )
+  any(.nombres_para_operar(partes_historicas) %in%
+        .nombres_para_operar(retiradas_originales))
 }
 
 
@@ -952,6 +961,9 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
 # cobertura escribe y exige que cada uno caiga en alguno de los tres casos,
 # para que un diagnostico nuevo no se desencuentre en silencio.
 .hallazgos_por_diagnostico <- list(
+  # Este diagnostico solo declara alcance: sus filas dependientes nombran los
+  # chequeos que se omitieron, no un hallazgo propio.
+  texto_largo_no_evaluado = character(),
   relacion_orden_columnas = "relacion_orden_columnas",
   proximidad_vocabulario = c(
     "casi_duplicados_vocabulario", "variantes_equifrecuentes_vocabulario"
@@ -977,6 +989,7 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
   }
   diagnosticos <- as.character(cobertura$diagnostico)
   columnas <- as.character(cobertura$columna)
+  nombres_columnas <- as.character(perfil$columnas$columna)
   unlist(lapply(seq_along(diagnosticos), function(i) {
     if (identical(diagnosticos[[i]], "muestra_perfilado") &&
         identical(as.character(columnas[[i]]), "")) {
@@ -994,66 +1007,30 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
     # Una fila que declina un diagnostico sobre varias columnas las nombra como
     # una lista -`a,b,c`-: declina tambien cada una, para que un hallazgo de
     # varias columnas que nombra alguna no se publique resuelto.
-    nombres <- columnas[[i]]
-    if (!is.na(nombres) && grepl(",", nombres, fixed = TRUE, useBytes = TRUE)) {
-      nombres <- unique(c(nombres, trimws(strsplit(nombres, ",", fixed = TRUE)[[1L]])))
+    nombres <- .columnas_cobertura(cobertura, i, nombres_columnas)
+    if (!length(nombres)) nombres <- columnas[[i]]
+    if (length(nombres) > 1L) {
+      nombres <- unique(c(columnas[[i]], nombres))
     }
     as.vector(outer(nombres, tipos, .clave_declinacion_deriva))
   }), use.names = FALSE)
 }
 
-.clave_columna_duplicada_deriva <- function(perfil, fila, columna,
-                                            indice_hallazgo = NA_integer_) {
-  if (!identical(as.character(fila$tipo_hallazgo), "columnas_duplicadas")) {
-    return(columna)
-  }
-  pares <- perfil$general$columnas_duplicadas
-  if (!is.data.frame(pares) || !nrow(pares) ||
-      !all(c("columna_1", "columna_2") %in% names(pares))) {
-    return(columna)
-  }
-  # `evidencia` puede estar protegida y entonces ya no contiene los dos
-  # nombres. El constructor de hallazgos recorre `columnas_duplicadas` en el
-  # mismo orden en que los guarda el perfil: usar ese rango recupera el par
-  # completo sin publicar ni leer valores de las celdas.
-  tipos <- as.character(perfil$hallazgos$tipo_hallazgo)
-  indices_pares <- which(tipos == "columnas_duplicadas")
-  if (length(indice_hallazgo) == 1L && is.finite(indice_hallazgo)) {
-    orden <- match(indice_hallazgo, indices_pares)
-    if (length(orden) == 1L && !is.na(orden) && orden <= nrow(pares)) {
-      candidatas <- .nombres_para_operar(c(
-        pares$columna_1[[orden]], pares$columna_2[[orden]]
-      ))
-      return(paste(.sort_por_bytes(candidatas), collapse = ","))
-    }
-  }
-  # Fallback para perfiles resumidos o llamadas antiguas: si el extremo solo
-  # pertenece a un par, el contenido del par sigue siendo identificable.
-  candidatas_por_extremo <- which(vapply(seq_len(nrow(pares)), function(i) {
-    columna %in% c(pares$columna_1[[i]], pares$columna_2[[i]])
-  }, logical(1L)))
-  if (length(candidatas_por_extremo) == 1L) {
-    i <- candidatas_por_extremo[[1L]]
-    candidatas <- .nombres_para_operar(c(
-      pares$columna_1[[i]], pares$columna_2[[i]]
-    ))
-    return(paste(.sort_por_bytes(candidatas), collapse = ","))
-  }
-  evidencia <- as.character(fila$evidencia)
-  evidencia <- trimws(sub(";.*$", "", evidencia))
-  partes <- strsplit(evidencia, " = ", fixed = TRUE)[[1L]]
-  if (length(partes) == 2L) {
-    buscadas <- .nombres_para_operar(partes)
-    for (i in seq_len(nrow(pares))) {
-      candidatas <- .nombres_para_operar(
-        c(pares$columna_1[[i]], pares$columna_2[[i]])
-      )
-      if (setequal(buscadas, candidatas)) {
-        return(paste(.sort_por_bytes(candidatas), collapse = ","))
-      }
-    }
-  }
+# Los nombres de un hallazgo `columnas_duplicadas`: el grupo que guarda el
+# perfil, que es tambien como se lee un perfil de una version anterior, con un
+# hallazgo por par -sus pares caen en el mismo grupo y se comparan como uno-.
+# Sin los grupos -un perfil resumido- quedan los nombres de la evidencia; y si
+# tampoco estan, la columna sola.
+.miembros_columna_duplicada_deriva <- function(perfil, fila, columna, grupos) {
+  miembros <- .miembros_columnas_duplicadas(perfil, fila, grupos)
+  if (!is.null(miembros)) return(miembros)
+  partes <- .miembros_columnas_duplicadas_evidencia(fila$evidencia[[1L]])
+  if (length(partes)) return(partes)
   columna
+}
+
+.clave_columna_duplicada_deriva <- function(miembros) {
+  paste(.sort_por_bytes(.nombres_para_operar(miembros)), collapse = ",")
 }
 
 .hallazgo_cuenta_filas_tabla <- function(fila) {
@@ -1075,24 +1052,87 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
     ))
   }
   columna <- ifelse(is.na(x$columna), "<tabla>", as.character(x$columna))
-  columna_clave <- vapply(seq_len(nrow(x)), function(i) {
-    .clave_columna_duplicada_deriva(
-      perfil, x[i, , drop = FALSE], columna[[i]], indice_hallazgo = i
+  # Un hallazgo `columnas_duplicadas` se identifica por TODAS sus columnas, sin
+  # importar el orden: la primera del grupo cambia si se reordenan las columnas
+  # y el grupo sigue siendo el mismo. Los grupos se leen una vez; buscarlos por
+  # hallazgo recorria todos los hallazgos en cada uno.
+  columna_clave <- columna
+  miembros_duplicadas <- list()
+  duplicadas <- which(as.character(x$tipo_hallazgo) == "columnas_duplicadas")
+  con_grupo_duplicadas <- logical(length(duplicadas))
+  if (length(duplicadas)) {
+    # La clave se arma una vez por grupo: un perfil de una version anterior
+    # con 1.000 columnas iguales trae 499.500 hallazgos de un mismo grupo.
+    grupos <- .grupos_columnas_duplicadas_perfil(perfil)
+    claves_grupo <- vapply(
+      grupos$grupos, .clave_columna_duplicada_deriva, character(1L)
     )
-  }, character(1L))
-  clave <- .clave_bytes(paste(
-    .clave_bytes(columna_clave), .clave_bytes(x$tipo_hallazgo), sep = "\034"
-  ))
+    grupo_fila <- if (length(grupos$grupos)) {
+      grupos$grupo[match(
+        .nombres_para_operar(as.character(x$columna[duplicadas])), grupos$claves
+      )]
+    } else rep(NA_integer_, length(duplicadas))
+    miembros_duplicadas <- vector("list", length(duplicadas))
+    con_grupo <- !is.na(grupo_fila)
+    con_grupo_duplicadas <- con_grupo
+    miembros_duplicadas[con_grupo] <- grupos$grupos[grupo_fila[con_grupo]]
+    columna_clave[duplicadas[con_grupo]] <- claves_grupo[grupo_fila[con_grupo]]
+    for (j in which(!con_grupo)) {
+      i <- duplicadas[[j]]
+      miembros_duplicadas[[j]] <- .miembros_columna_duplicada_deriva(
+        perfil, x[i, , drop = FALSE], columna[[i]], grupos
+      )
+      columna_clave[[i]] <- .clave_columna_duplicada_deriva(
+        miembros_duplicadas[[j]]
+      )
+    }
+  }
+  clave_de <- function(filas) {
+    .clave_bytes(paste(
+      .clave_bytes(columna_clave[filas]), .clave_bytes(x$tipo_hallazgo[filas]),
+      sep = "\034"
+    ))
+  }
+  # Las filas de un mismo grupo de columnas iguales comparten la clave, que se
+  # arma una vez por grupo: armarla por fila copiaba la lista entera del grupo
+  # en cada uno de los 499.500 pares de un perfil viejo de 1.000 columnas.
+  por_fila <- setdiff(seq_len(nrow(x)), duplicadas[con_grupo_duplicadas])
+  clave <- character(nrow(x))
+  clave[por_fila] <- clave_de(por_fila)
+  if (any(con_grupo_duplicadas)) {
+    filas_con_grupo <- duplicadas[con_grupo_duplicadas]
+    grupos_presentes <- grupo_fila[con_grupo_duplicadas]
+    primera_de_grupo <- filas_con_grupo[match(
+      seq_along(claves_grupo), grupos_presentes
+    )]
+    clave_grupo <- rep(NA_character_, length(claves_grupo))
+    usados <- !is.na(primera_de_grupo)
+    clave_grupo[usados] <- clave_de(primera_de_grupo[usados])
+    clave[filas_con_grupo] <- clave_grupo[grupos_presentes]
+  }
   grupos <- .dividir_por_bytes(seq_len(nrow(x)), clave, drop = TRUE)
+  miembros_por_fila <- vector("list", nrow(x))
+  miembros_por_fila[duplicadas] <- miembros_duplicadas
   partes <- lapply(grupos, function(indices) {
     nivel <- match(as.character(x$severidad[indices]),
                    c("ok", "sospechoso", "error"))
     elegido <- indices[which.max(nivel)]
+    evidencia <- x$evidencia[[elegido]]
+    # Un perfil de una version anterior trae un hallazgo por par: la fila que
+    # representa al grupo tiene la evidencia de un solo par, `A = B`, y
+    # publicarla como resuelta diria que dejo de valer una igualdad que puede
+    # seguir. Se nombra el grupo entero, con el resto de la evidencia.
+    if (length(indices) > 1L && !is.null(miembros_por_fila[[elegido]])) {
+      evidencia <- paste0(
+        paste(miembros_por_fila[[elegido]], collapse = " = "),
+        sub("^[^;]*", "", evidencia)
+      )
+    }
     data.frame(
       clave = clave[[elegido]], columna = columna[[elegido]],
       tipo_hallazgo = x$tipo_hallazgo[[elegido]],
       severidad = as.character(x$severidad[[elegido]]),
-      evidencia = x$evidencia[[elegido]],
+      evidencia = evidencia,
       unidad_conteo = if ("unidad_conteo" %in% names(x)) {
         as.character(x$unidad_conteo[[elegido]])
       } else NA_character_,
@@ -1102,7 +1142,150 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
   })
   resultado <- do.call(rbind, unname(partes))
   rownames(resultado) <- NULL
+  # Las columnas de cada grupo, por clave: la comparacion decide con ellas si
+  # un grupo que cambio de miembros perdio o gano una igualdad.
+  if (length(duplicadas)) {
+    claves_duplicadas <- clave[duplicadas]
+    unicas <- !duplicated(claves_duplicadas)
+    attr(resultado, "miembros_columnas_duplicadas") <- list(
+      clave = claves_duplicadas[unicas],
+      miembros = miembros_duplicadas[unicas]
+    )
+  }
   resultado
+}
+
+# Como se reparten en grupos de columnas iguales los nombres de un perfil: el
+# grupo de cada nombre, o `NA` si no esta en ninguno.
+.grupo_duplicadas_deriva <- function(resumen, nombres) {
+  registro <- attr(resumen, "miembros_columnas_duplicadas", exact = TRUE)
+  if (is.null(registro) || !length(registro$miembros)) {
+    return(rep(NA_integer_, length(nombres)))
+  }
+  claves <- lapply(registro$miembros, .nombres_para_operar)
+  todas <- unlist(claves, use.names = FALSE)
+  grupo <- rep.int(seq_along(claves), lengths(claves))
+  grupo[match(.nombres_para_operar(nombres), todas)]
+}
+
+.miembros_duplicadas_deriva <- function(resumen, clave) {
+  registro <- attr(resumen, "miembros_columnas_duplicadas", exact = TRUE)
+  if (is.null(registro)) return(character())
+  i <- match(clave, registro$clave)
+  if (is.na(i)) character() else registro$miembros[[i]]
+}
+
+# Un grupo de columnas iguales se compara por las igualdades que afirma, no
+# por su lista entera: si el grupo nuevo tiene otros miembros, publicar el
+# viejo `resuelto` y el nuevo `aparecido` diria que se resolvio una igualdad
+# que sigue y que aparecio otra que ya estaba. Con `A = B = C` antes y `A = B`
+# despues, lo que cambio es que C dejo de ser igual: el grupo viejo se publica
+# `resuelto` y `A = B` no aparece. Con `A = B` antes y `A = B = F` despues, el
+# grupo nuevo aparece y el viejo no se resuelve. Una columna retirada o nueva
+# no cuenta como cambio de las demas: `A = B = C` sin `C` en el perfil nuevo
+# no publica nada, como cuando el hallazgo era por par.
+#
+# `se_separo`: algun par del grupo anterior, con las dos columnas todavia
+# presentes, ya no esta en un mismo grupo.
+.grupo_duplicadas_se_separo <- function(miembros, presentes, resumen_actual) {
+  if (!length(miembros)) return(TRUE)
+  sigue <- miembros[.nombres_para_operar(miembros) %in% presentes]
+  if (length(sigue) < 2L) return(FALSE)
+  grupos <- .grupo_duplicadas_deriva(resumen_actual, sigue)
+  anyNA(grupos) || length(unique(grupos)) > 1L
+}
+
+# La igualdad que publica `columnas_duplicadas` es la del detector, que solo
+# iguala columnas del mismo tipo: `identical()` sobre lo que el perfil lee como
+# contenido. Si un grupo se separa porque una de sus columnas cambio de tipo
+# declarado -un entero que llega como doble, un logico como entero-, el
+# detector no volvio a compararlas: con tipos distintos no hay igualdad que
+# medir, y los valores pueden seguir siendo los mismos. Publicar `resuelto` era
+# afirmar una mejora que no se midio. Es el mismo caso que el de un diagnostico
+# de texto sobre una columna que dejo de ser texto: no se volvio a evaluar, y
+# dejar de mirar no es lo mismo que arreglar.
+#
+# Se decide sobre las columnas del grupo que siguen en el otro perfil
+# (`presentes`): la separacion es solo de tipo si, dentro de cada tipo
+# declarado, siguen todas en un mismo grupo -o son una sola-, y hay mas de un
+# tipo. Y si el otro perfil ya muestra valores distintos entre los tipos -otros
+# faltantes, otra cantidad de distintos, otro minimo o maximo-, la igualdad se
+# perdio de verdad y no hace falta comparar los valores para saberlo.
+# Devuelve las columnas que cambiaron de tipo, o `character()` si la
+# separacion no se explica solo por el tipo.
+.duplicadas_separadas_por_tipo <- function(miembros, presentes, propio, otro,
+                                           resumen_otro, exigir_todas = FALSE) {
+  if (length(miembros) < 2L) return(character())
+  sigue <- miembros[.nombres_para_operar(miembros) %in% presentes]
+  if (length(sigue) < 2L || (exigir_todas && length(sigue) < length(miembros))) {
+    return(character())
+  }
+  tipos <- .tipos_declarados_deriva(otro, sigue)
+  if (anyNA(tipos) || length(unique(tipos)) < 2L) return(character())
+  grupos <- .grupo_duplicadas_deriva(resumen_otro, sigue)
+  por_tipo <- .dividir_por_bytes(seq_along(sigue), tipos, drop = TRUE)
+  for (indices in por_tipo) {
+    if (length(indices) < 2L) next
+    g <- grupos[indices]
+    if (anyNA(g) || length(unique(g)) > 1L) return(character())
+  }
+  representantes <- vapply(por_tipo, function(indices) indices[[1L]], integer(1L))
+  if (.resumenes_distintos_deriva(otro, sigue[representantes])) {
+    return(character())
+  }
+  antes <- .tipos_declarados_deriva(propio, sigue)
+  sigue[is.na(antes) | antes != tipos]
+}
+
+.tipos_declarados_deriva <- function(perfil, nombres) {
+  columnas <- perfil$columnas
+  if (!is.data.frame(columnas) ||
+      !all(c("columna", "tipo_declarado") %in% names(columnas))) {
+    return(rep(NA_character_, length(nombres)))
+  }
+  as.character(columnas$tipo_declarado)[match(
+    .nombres_para_operar(nombres),
+    .nombres_para_operar(as.character(columnas$columna))
+  )]
+}
+
+# Si el perfil ya distingue los valores de estas columnas por lo que resume de
+# cada una. Solo lo que no depende del tipo -faltantes y distintos- y, si las
+# dos lo tienen, el rango numerico, que un entero y un doble comparten.
+.resumenes_distintos_deriva <- function(perfil, nombres) {
+  columnas <- perfil$columnas
+  if (!is.data.frame(columnas) || length(nombres) < 2L) return(FALSE)
+  filas <- match(
+    .nombres_para_operar(nombres),
+    .nombres_para_operar(as.character(columnas$columna))
+  )
+  if (anyNA(filas)) return(FALSE)
+  for (campo in intersect(c("n_faltantes", "n_distintos", "minimo", "maximo"),
+                          names(columnas))) {
+    valores <- suppressWarnings(as.numeric(columnas[[campo]][filas]))
+    valores <- valores[is.finite(valores)]
+    if (length(valores) == length(filas) && length(unique(valores)) > 1L) {
+      return(TRUE)
+    }
+  }
+  FALSE
+}
+
+.columnas_con_tipo_deriva <- function(columnas, anterior, actual) {
+  antes <- .tipos_declarados_deriva(anterior, columnas)
+  despues <- .tipos_declarados_deriva(actual, columnas)
+  paste0(
+    "`", columnas, "` (", antes, " a ", despues, ")", collapse = ", "
+  )
+}
+
+# `se_unio`: algun par del grupo nuevo no estaba en un mismo grupo antes,
+# porque una de sus columnas no existia o porque estaban en grupos distintos.
+.grupo_duplicadas_se_unio <- function(miembros, existian, resumen_anterior) {
+  if (!length(miembros)) return(TRUE)
+  if (!all(.nombres_para_operar(miembros) %in% existian)) return(TRUE)
+  grupos <- .grupo_duplicadas_deriva(resumen_anterior, miembros)
+  anyNA(grupos) || length(unique(grupos)) > 1L
 }
 
 # La regla de "alcanza el umbral", escrita UNA vez. Estaba escrita de dos
@@ -1161,10 +1344,10 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
   actual_seg <- trunc(as.numeric(fecha_actual))
   if (anterior_seg <= actual_seg) return(invisible(NULL))
   .detener(
-    "`anterior` esta fechado despues que `actual` (",
+    "`anterior` est\u00e1 fechado despu\u00e9s que `actual` (",
     format(fecha_anterior, "%Y-%m-%d %H:%M:%S"), " contra ",
-    format(fecha_actual, "%Y-%m-%d %H:%M:%S"), "), asi que ", funcion,
-    " publicaria la direccion del cambio al reves. Invierta los argumentos.",
+    format(fecha_actual, "%Y-%m-%d %H:%M:%S"), "), as\u00ed que ", funcion,
+    " publicar\u00eda la direcci\u00f3n del cambio al rev\u00e9s. Invertir los argumentos.",
     call. = FALSE
   )
 }
@@ -1314,11 +1497,17 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
 #' declara—; la descripción nombra el argumento. Al revés, un hallazgo que
 #' aparece porque el perfil nuevo encendió o declaró lo que lo habilita sigue
 #' saliendo `aparecido`, y su descripción dice que el anterior no lo evaluaba.
-#' Un hallazgo de varias columnas —un par de columnas duplicado, una relación
-#' entre columnas— se compara por el contenido de sus columnas, no por sus
-#' posiciones en la tabla: reordenar columnas no hace aparecer ni desaparecer
-#' un par. Sólo no se presenta como resuelto si alguna de sus columnas
-#' desapareció. Si el tope de un diagnóstico deja un hallazgo fuera del alcance
+#' Un hallazgo de varias columnas —un grupo de columnas duplicadas, una
+#' relación entre columnas— se compara por el contenido de sus columnas, no por
+#' sus posiciones en la tabla: reordenar columnas no hace aparecer ni
+#' desaparecer un grupo. Sólo no se presenta como resuelto si alguna de sus
+#' columnas desapareció. Un grupo de columnas duplicadas que se separa sólo
+#' porque una de sus columnas cambió de tipo declarado —un entero que llega
+#' como doble— se publica `no_evaluado`, con severidad `sospechoso`: el
+#' diagnóstico sólo iguala columnas del mismo tipo y no volvió a compararlas,
+#' salvo que el perfil nuevo ya muestre valores distintos (otros faltantes,
+#' otra cantidad de distintos, otro mínimo o máximo); y uno que aparece sólo
+#' por un cambio de tipo sale `aparecido` con esa causa en la descripción. Si el tope de un diagnóstico deja un hallazgo fuera del alcance
 #' nuevo, se publica `no_evaluado` con el motivo de cobertura. La proximidad de
 #' vocabulario también puede dejar pares con frecuencias parejas bajo su piso de
 #' asimetría sin emitir un hallazgo; esa cobertura parcial se conserva como
@@ -1613,8 +1802,8 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
         columna, "alcance_resumen", "modificado", "sospechoso",
         .texto_numero_deriva(excluidos_a), .texto_numero_deriva(excluidos_b),
         descripcion = paste(
-          "Los dos resumenes se calcularon sobre distinta cantidad de valores,",
-          "asi que las diferencias de media, rango o cardinalidad pueden venir",
+          "Los dos res\u00famenes se calcularon sobre distinta cantidad de valores,",
+          "as\u00ed que las diferencias de media, rango o cardinalidad pueden venir",
           "del alcance y no de los datos."
         ),
         evidencia = paste0(
@@ -2113,12 +2302,12 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
       texto_aplicabilidad(aplicabilidad_b),
       descripcion = paste(
         "Cambiaron las columnas con regla de aplicabilidad; esa regla redefine",
-        "el universo aplicable, asi que las diferencias de faltantes,",
-        "cardinalidad y rango pueden ser del metodo y no de los datos."
+        "el universo aplicable, as\u00ed que las diferencias de faltantes,",
+        "cardinalidad y rango pueden ser del m\u00e9todo y no de los datos."
       ),
       evidencia = paste(
         "Se mantienen las comparaciones para que las corridas siguientes sigan",
-        "detectando deriva con la politica vigente."
+        "detectando deriva con la pol\u00edtica vigente."
       )
     )
   }
@@ -2137,12 +2326,12 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
       texto_opcionales(opcionales_b),
       descripcion = paste(
         "Cambiaron las columnas declaradas en `columnas_opcionales`; su",
-        "universo de completitud son las celdas presentes, asi que las",
-        "diferencias de faltantes pueden ser del metodo y no de los datos."
+        "universo de completitud son las celdas presentes, as\u00ed que las",
+        "diferencias de faltantes pueden ser del m\u00e9todo y no de los datos."
       ),
       evidencia = paste(
         "Se mantienen las comparaciones para que las corridas siguientes sigan",
-        "detectando deriva con la politica vigente."
+        "detectando deriva con la pol\u00edtica vigente."
       )
     )
   }
@@ -2152,6 +2341,7 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
   nuevos <- setdiff(hallazgos_b$clave, hallazgos_a$clave)
   resueltos <- setdiff(hallazgos_a$clave, hallazgos_b$clave)
   nombres_actuales <- .nombres_para_operar(unique(mapa_b$original))
+  nombres_anteriores <- .nombres_para_operar(unique(mapa_a$original))
   # Al reves de la declinacion: un hallazgo que aparece porque el perfil nuevo
   # encendio el diagnostico o declaro lo que lo habilita no era un hallazgo que
   # faltara en los datos de antes. Sigue siendo `aparecido` -esta en el perfil
@@ -2160,6 +2350,17 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
   habilitados_ahora <- .declinados_por_declaracion_retirada(actual, anterior)
   for (clave in nuevos) {
     x <- hallazgos_b[match(clave, hallazgos_b$clave), , drop = FALSE]
+    unidas_por_tipo <- character()
+    if (identical(as.character(x$tipo_hallazgo), "columnas_duplicadas")) {
+      miembros_nuevos <- .miembros_duplicadas_deriva(hallazgos_b, clave)
+      if (!.grupo_duplicadas_se_unio(
+        miembros_nuevos, nombres_anteriores, hallazgos_a
+      )) next
+      unidas_por_tipo <- .duplicadas_separadas_por_tipo(
+        miembros_nuevos, nombres_anteriores, actual, anterior, hallazgos_a,
+        exigir_todas = TRUE
+      )
+    }
     clave_habilitada <- .clave_declinacion_deriva(x$columna, x$tipo_hallazgo)
     argumento_nuevo <- if (clave_habilitada %in% habilitados_ahora) {
       names(habilitados_ahora)[match(clave_habilitada, habilitados_ahora)]
@@ -2167,7 +2368,15 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
     agregar(
       if (x$columna == "<tabla>") NA_character_ else x$columna,
       "hallazgo", "aparecido", x$severidad, NA_character_, x$tipo_hallazgo,
-      descripcion = if (is.na(argumento_nuevo)) {
+      descripcion = if (length(unidas_por_tipo)) {
+        paste0(
+          "Apareci\u00f3 un hallazgo que el perfil anterior no pod\u00eda medir: ",
+          "cambi\u00f3 el tipo declarado de ",
+          .columnas_con_tipo_deriva(unidas_por_tipo, anterior, actual),
+          ", y este diagn\u00f3stico s\u00f3lo iguala columnas del mismo tipo, as\u00ed ",
+          "que no es necesariamente un cambio de los valores."
+        )
+      } else if (is.na(argumento_nuevo)) {
         "Apareci\u00f3 un hallazgo que no estaba en el perfil anterior."
       } else {
         paste0(
@@ -2215,14 +2424,23 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
     } else {
       x$columna
     }
-    if (x$columna != "<tabla>" &&
+    columnas_hallazgo <- if (is.list(x$trazabilidad[[1L]]) &&
+                             length(x$trazabilidad[[1L]]$columnas)) {
+      x$trazabilidad[[1L]]$columnas
+    } else NULL
+    separadas_por_tipo <- character()
+    if (identical(as.character(x$tipo_hallazgo), "columnas_duplicadas")) {
+      miembros_viejos <- .miembros_duplicadas_deriva(hallazgos_a, clave)
+      if (!.grupo_duplicadas_se_separo(
+        miembros_viejos, nombres_actuales, hallazgos_b
+      )) next
+      separadas_por_tipo <- .duplicadas_separadas_por_tipo(
+        miembros_viejos, nombres_actuales, anterior, actual, hallazgos_b
+      )
+    } else if (x$columna != "<tabla>" &&
         !.nombres_para_operar(x$columna) %in% nombres_actuales &&
         .hallazgo_nombra_columna_retirada(
-          columna_hallazgo, columnas_retiradas
-        )) next
-    if (identical(as.character(x$tipo_hallazgo), "columnas_duplicadas") &&
-        .hallazgo_nombra_columna_retirada(
-          columna_hallazgo, columnas_retiradas
+          columna_hallazgo, columnas_retiradas, columnas_hallazgo
         )) next
     if (.hallazgo_cuenta_filas_tabla(x) &&
         nzchar(motivo_columnas_cambiadas)) {
@@ -2231,7 +2449,7 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
         x$tipo_hallazgo, NA_character_,
         descripcion = paste0(
           "El hallazgo cuenta filas de la tabla, pero no se puede decidir si",
-          " se resolvio porque cambio el universo de columnas: ",
+          " se resolvi\u00f3 porque cambi\u00f3 el universo de columnas: ",
           motivo_columnas_cambiadas, "."
         ),
         evidencia = paste0(
@@ -2248,9 +2466,13 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
     # cobertura del perfil nuevo declina su diagnostico sobre alguna de ellas:
     # las relaciones entre columnas declaran las que omitieron como una lista
     # (`a,b,c`), y la guarda las parte en `.diagnosticos_declinados_deriva()`.
-    componentes <- if (!identical(x$columna, "<tabla>") &&
-                       grepl(",", x$columna, fixed = TRUE, useBytes = TRUE)) {
-      trimws(strsplit(x$columna, ",", fixed = TRUE)[[1L]])
+    componentes <- if (!identical(x$columna, "<tabla>")) {
+      if (is.list(x$trazabilidad[[1L]]) &&
+          length(x$trazabilidad[[1L]]$columnas)) {
+        as.character(x$trazabilidad[[1L]]$columnas)
+      } else {
+        .separar_nombres_columnas_historico(x$columna, sep = ",")
+      }
     } else character()
     declinado <- clave_declinacion %in% declinados_ahora ||
       any(.clave_declinacion_deriva(
@@ -2267,13 +2489,22 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
     } else NA_character_
     por_tipo <- clave_declinacion %in%
       .declinados_por_cambio_de_tipo(anterior, actual)
+    declinado <- declinado || length(separadas_por_tipo) > 0L
     agregar(
       if (x$columna == "<tabla>") NA_character_ else x$columna,
       "hallazgo",
       if (declinado) "no_evaluado" else "resuelto",
       if (declinado) "sospechoso" else "ok",
       x$tipo_hallazgo, NA_character_,
-      descripcion = if (por_tipo) {
+      descripcion = if (length(separadas_por_tipo)) {
+        paste0(
+          "Cambi\u00f3 el tipo declarado de ",
+          .columnas_con_tipo_deriva(separadas_por_tipo, anterior, actual),
+          ", y este diagn\u00f3stico s\u00f3lo iguala columnas del mismo tipo, as\u00ed ",
+          "que no las volvi\u00f3 a comparar: sus valores pueden seguir siendo ",
+          "los mismos. Dejar de mirar no es lo mismo que arreglar."
+        )
+      } else if (por_tipo) {
         paste(
           "La columna dej\u00f3 de ser texto y este diagn\u00f3stico compara valores",
           "de texto entre s\u00ed, as\u00ed que no se volvi\u00f3 a evaluar: los valores",
@@ -2661,7 +2892,7 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
   if (!is.numeric(a) || !is.numeric(b) ||
       !isTRUE(is.finite(a)) || !isTRUE(is.finite(b))) {
     .detener(
-      "Los campos del eje `flotante` deben contener numeros finitos o faltantes.",
+      "Los campos del eje `flotante` deben contener n\u00fameros finitos o faltantes.",
       call. = FALSE
     )
   }
@@ -2806,7 +3037,7 @@ comparar_equivalencia <- function(anterior, actual, tolerancia) {
   if (!is.numeric(tolerancia) || length(tolerancia) != 1L ||
       is.na(tolerancia) || !is.finite(tolerancia) || tolerancia < 0) {
     .detener(
-      "`tolerancia` debe ser un escalar numerico finito, sin NA y mayor o igual a 0.",
+      "`tolerancia` debe ser un escalar num\u00e9rico finito, sin NA y mayor o igual a 0.",
       call. = FALSE
     )
   }

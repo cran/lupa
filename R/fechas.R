@@ -4,10 +4,49 @@
   sub("([+-][0-9]{2}):([0-9]{2})$", "\\1\\2", x, perl = TRUE)
 }
 
-.es_fecha_valida <- function(x, formato, expresion, granularidad = "dia") {
+# RFC 3339 (seccion 5.6) admite `t` y `z` en minuscula por `T` y `Z`, y la tabla
+# de formatos -y `strptime()`- solo las conocen en mayuscula: una columna de
+# instantes de una API con `z` salia `identificador`, sin rango, mientras la
+# misma con `Z` era `fecha-hora`. Se suben las dos letras solo en un texto que
+# ya tiene la forma entera de una fecha-hora -digitos, separadores, la hora y,
+# si esta, la zona-, que es ASCII: ninguna otra escritura cambia. Lo llaman,
+# una vez por columna, la deteccion y la lectura de las fechas, y la validez de
+# un formato cuando quien la llama no lo hizo -la conversion de `aplicar()`-.
+.designadores_fecha_hora_mayuscula <- function(x) {
+  if (!length(x)) return(x)
+  minuscula <- !is.na(x) & (
+    grepl("t", x, fixed = TRUE, useBytes = TRUE) |
+      grepl("z", x, fixed = TRUE, useBytes = TRUE)
+  )
+  if (!any(minuscula)) return(x)
+  candidatos <- minuscula
+  candidatos[minuscula] <- grepl(
+    paste0(
+      "^[0-9][0-9./-]*[0-9][Tt ][0-9]{2}:[0-9]{2}",
+      "(?::[0-9]{2}(?:[.][0-9]+)?)?(?:[Zz]|[+-][0-9]{2}:[0-9]{2})?$"
+    ),
+    x[minuscula], perl = TRUE, useBytes = TRUE
+  )
+  if (!any(candidatos)) return(x)
+  y <- x[candidatos]
+  y <- sub("^([0-9][0-9./-]*[0-9])t", "\\1T", y, perl = TRUE)
+  y <- sub("z$", "Z", y, perl = TRUE)
+  x[candidatos] <- y
+  x
+}
+
+.es_fecha_valida <- function(x, formato, expresion, granularidad = "dia",
+                             designadores = TRUE) {
   # Declarado, y solo lo legible: un texto que no es UTF-8 valido no es una
   # fecha en ninguna sesion, y bajo un locale UTF-8 hacia abortar el `grepl()`.
   x <- .declarar_utf8_valido(as.character(x))
+  # `designadores = FALSE` cuando quien llama ya subio la `t` y la `z` de la
+  # columna entera: la deteccion prueba decenas de formatos sobre los mismos
+  # valores y no tiene por que repetir la pasada en cada uno.
+  if (isTRUE(designadores) &&
+      grepl("T%H", formato, fixed = TRUE, useBytes = TRUE)) {
+    x <- .designadores_fecha_hora_mayuscula(x)
+  }
   legibles <- !is.na(x) & (Encoding(x) == "latin1" | validUTF8(x))
   coincide <- rep(FALSE, length(x))
   # Sin nada legible no se llama a `grepl()`: en Windows cada llamada con
@@ -168,6 +207,61 @@
 .especificaciones_fecha_tabla <- .construir_especificaciones_fecha()
 
 .especificaciones_fecha <- function() .especificaciones_fecha_tabla
+
+# Los caracteres que una expresion de la tabla exige en todo valor que case con
+# ella: lo que queda al sacar las clases (`[0-9]{4}`, `[+-]`), los grupos con
+# alternativas (`(?:Z|...)`) y las anclas, con el punto escapado leido como
+# punto. Sirve para descartar sin probarlo un formato que no puede casar: si
+# ningun valor de la columna tiene `/`, ningun `%d/%m/%Y` va a casar, y su
+# mascara es toda FALSE sin pasar por `.es_fecha_valida()`.
+#
+# Tiene que ser una condicion necesaria, nunca de mas: ante cualquier cosa que
+# no sepa leer -un punto sin escapar, un cuantificador sobre un literal, un
+# parentesis que quedo- no exige nada, y el formato se prueba como siempre.
+.literales_exigidos_fecha <- function(expresion) {
+  vapply(expresion, function(e) {
+    x <- gsub("\\(\\?:[^()]*\\)([?*+]|\\{[0-9,]+\\})?", "", e, perl = TRUE)
+    x <- gsub("\\[[^]]*\\]([?*+]|\\{[0-9,]+\\})?", "", x, perl = TRUE)
+    x <- sub("^\\^", "", x, perl = TRUE)
+    x <- sub("\\$$", "", x, perl = TRUE)
+    x <- gsub("\\.", "\001", x, fixed = TRUE)
+    if (grepl("[][(){}|?*+\\\\^$.]", x, perl = TRUE)) return("")
+    x <- gsub("\001", ".", x, fixed = TRUE)
+    # Un conjunto de caracteres en el orden de sus bytes, sin `sort()`: el de base
+    # ordena con el locale, y esto corre al instalar, antes que `.sort_por_bytes()`.
+    caracteres <- unique(strsplit(x, "", fixed = TRUE)[[1L]])
+    ascii <- strsplit(rawToChar(as.raw(1:127)), "", fixed = TRUE)[[1L]]
+    paste(c(intersect(ascii, caracteres), setdiff(caracteres, ascii)), collapse = "")
+  }, character(1L), USE.NAMES = FALSE)
+}
+
+# Se calcula al instalar, junto con la tabla, y se usa solo si la tabla que se
+# recibe es esta: si no, se calcula al vuelo.
+.literales_especificaciones_fecha_tabla <- list(
+  expresion = .especificaciones_fecha_tabla$expresion,
+  literales = .literales_exigidos_fecha(.especificaciones_fecha_tabla$expresion)
+)
+
+# Que formatos de la tabla pueden casar con algun valor, por los caracteres que
+# exigen. Una mascara descartada aca es la misma que `.es_fecha_valida()`
+# devolveria: ningun valor casa con la expresion, todo FALSE.
+.formatos_fecha_posibles <- function(valores, especificaciones) {
+  tabla <- .literales_especificaciones_fecha_tabla
+  literales <- if (identical(especificaciones$expresion, tabla$expresion)) {
+    tabla$literales
+  } else {
+    .literales_exigidos_fecha(especificaciones$expresion)
+  }
+  exigidos <- strsplit(literales, "", fixed = TRUE)
+  caracteres <- unique(unlist(exigidos, use.names = FALSE))
+  # `useBytes`: los caracteres exigidos son ASCII, y asi un texto que no sea
+  # UTF-8 valido no hace abortar la busqueda. Contarlo presente solo hace que
+  # se pruebe un formato de mas, nunca de menos.
+  presentes <- caracteres[vapply(caracteres, function(caracter) {
+    any(grepl(caracter, valores, fixed = TRUE, useBytes = TRUE), na.rm = TRUE)
+  }, logical(1L), USE.NAMES = FALSE)]
+  vapply(exigidos, function(l) all(l %in% presentes), logical(1L))
+}
 
 .meses_fecha_lupa <- c(
   enero = 1L, ene = 1L, january = 1L, jan = 1L,
@@ -394,7 +488,7 @@
                           n_inequivocos = n, n_ambiguos = 0L,
                           grupo_ambiguo = "", anio_dos_digitos = FALSE,
                           granularidad = "dia") {
-  data.frame(
+  .data_frame_simple(
     formato = formato,
     n = as.integer(n),
     proporcion = if (total) n / total else NA_real_,
@@ -435,6 +529,10 @@
 #' Una hora con segundo 60 no se acepta: R la leería como el minuto siguiente.
 #' Tampoco la hora `24:00`: R la leería como la medianoche del día siguiente,
 #' y el perfil publicaría una fecha que nadie escribió.
+#' El separador `T` y la zona `Z` de una fecha-hora se reconocen también en
+#' minúscula (`2020-01-31t23:30:00z`), como lo admite RFC 3339 (sección 5.6).
+#' Un `POSIXlt` se lee como el `POSIXct` del mismo instante: el atributo
+#' `n_filas_fecha_civil_distinta_utc` cuenta igual en las dos clases.
 #'
 #' @param x Vector de texto, fechas o fechas-hora.
 #' @param muestra Máximo de valores que se analizan.
@@ -464,6 +562,14 @@ detectar_formatos_fecha <- function(x, muestra = 1e5) {
   valores_originales <- muestra_x$valores
 
   if (inherits(valores_originales, "POSIXt")) {
+    # `format()` de un `POSIXlt` ignora `tz`: devuelve la hora de pared que trae
+    # adentro, asi que la fecha civil "en UTC" era la de origen y
+    # `n_filas_fecha_civil_distinta_utc` salia 0 donde el mismo instante como
+    # `POSIXct` daba 2. `perfilar()` ya lo convertia antes de llegar aca; la
+    # funcion exportada no. `as.POSIXct()` conserva la zona declarada.
+    if (inherits(valores_originales, "POSIXlt")) {
+      valores_originales <- as.POSIXct(valores_originales)
+    }
     n <- sum(!is.na(valores_originales))
     resultado <- .fila_formato("%Y-%m-%d %H:%M:%S", n, n)
     resultado$grupo_ambiguo <- NULL
@@ -542,7 +648,11 @@ detectar_formatos_fecha <- function(x, muestra = 1e5) {
     return(resultado)
   }
   indices_restantes <- which(!cubiertos)
-  valores_numericos <- formas[indices_restantes]
+  # Una vez por columna, y no en cada uno de los formatos de abajo: ver
+  # `.designadores_fecha_hora_mayuscula()`.
+  valores_numericos <- .designadores_fecha_hora_mayuscula(
+    formas[indices_restantes]
+  )
   base_fecha <- paste0(
     "(?:[0-9]{4}[-/.][0-9]{1,2}[-/.][0-9]{1,2}|",
     "[0-9]{4}(?:-|/)[0-9]{1,2}|[0-9]{1,2}/[0-9]{4}|",
@@ -561,12 +671,26 @@ detectar_formatos_fecha <- function(x, muestra = 1e5) {
   valores <- valores_numericos[candidatos_fecha]
   pesos_numericos <- pesos[indices_numericos]
   especificaciones <- .especificaciones_fecha()
+  # Sin candidatos no hay nada que probar, y una columna que no es de fechas
+  # pagaba igual 147 llamadas a `.es_fecha_valida()` sobre un vector vacio:
+  # medido, 1323 de las 1480 llamadas al perfilar la tabla del README. Con
+  # candidatos, el formato que exige un caracter que ningun valor
+  # tiene tampoco se prueba. En los dos casos la mascara es la que
+  # `.es_fecha_valida()` devolveria, asi que la deteccion no cambia.
+  posibles <- if (length(valores)) {
+    .formatos_fecha_posibles(valores, especificaciones)
+  } else {
+    rep(FALSE, nrow(especificaciones))
+  }
+  ninguna <- rep(FALSE, length(valores))
   mascaras <- lapply(seq_len(nrow(especificaciones)), function(i) {
+    if (!posibles[[i]]) return(ninguna)
     .es_fecha_valida(
       valores,
       especificaciones$formato[[i]],
       especificaciones$expresion[[i]],
-      especificaciones$granularidad[[i]]
+      especificaciones$granularidad[[i]],
+      designadores = FALSE
     )
   })
   names(mascaras) <- especificaciones$formato
@@ -599,6 +723,10 @@ detectar_formatos_fecha <- function(x, muestra = 1e5) {
   # resultado es el de siempre.
   for (grupo in grupos) {
     indices <- which(especificaciones$grupo_ambiguo == grupo)
+    # Un grupo cuyas lecturas se descartaron todas arriba no lee ningun valor:
+    # es el `next` de `!any(con_valores)`, sin armar antes sus cuentas. Con 54
+    # grupos, armarlas era lo que mas costaba de la deteccion.
+    if (!any(posibles[indices])) next
     mascaras_grupo <- mascaras[indices]
     lecturas <- Reduce(`+`, lapply(mascaras_grupo, as.integer))
     ambiguos <- lecturas >= 2L
@@ -682,11 +810,12 @@ detectar_formatos_fecha <- function(x, muestra = 1e5) {
   }
 
   if (length(filas)) {
-    resultado <- do.call(rbind, filas)
+    # Los nombres de fila se descartan dos lineas abajo: ver `.apilar_filas()`.
+    resultado <- .apilar_filas(filas)
     resultado <- resultado[.orden_por_bytes(-resultado$n, resultado$formato), , drop = FALSE]
     rownames(resultado) <- NULL
   } else {
-    resultado <- data.frame(
+    resultado <- .data_frame_simple(
       formato = character(), n = integer(), proporcion = numeric(),
       estado = character(), n_inequivocos = integer(), n_ambiguos = integer(),
       grupo_ambiguo = character(), anio_dos_digitos = logical(),
@@ -785,6 +914,9 @@ detectar_formatos_fecha <- function(x, muestra = 1e5) {
     formatos$estado == "confirmado" & granularidades != "mes"
   ]
   especificaciones <- .especificaciones_fecha()
+  # La `t` y la `z` de RFC 3339 se leen como la deteccion las leyo: ver
+  # `.designadores_fecha_hora_mayuscula()`. Una vez, antes de los formatos.
+  formas_fecha <- .designadores_fecha_hora_mayuscula(formas)
   # Dos cambios, y los dos sacan una regla escrita dos veces.
   #
   # La VALIDEZ es la misma de la deteccion -`.es_fecha_valida()`-. Esta copia
@@ -804,11 +936,12 @@ detectar_formatos_fecha <- function(x, muestra = 1e5) {
     indice_especificacion <- match(formato, especificaciones$formato)
     if (is.na(indice_especificacion)) next
     patron <- especificaciones$expresion[[indice_especificacion]]
-    aplica <- is.na(convertidas) & grepl(patron, formas, perl = TRUE)
+    aplica <- is.na(convertidas) & grepl(patron, formas_fecha, perl = TRUE)
     if (!any(aplica)) next
-    validos <- .es_fecha_valida(formas[aplica], formato, patron)
+    validos <- .es_fecha_valida(formas_fecha[aplica], formato, patron,
+                                designadores = FALSE)
     if (!any(validos)) next
-    preparados <- .preparar_fecha_parseo(formas[aplica][validos], formato)
+    preparados <- .preparar_fecha_parseo(formas_fecha[aplica][validos], formato)
     convertido <- as.numeric(as.POSIXct(suppressWarnings(
       .strptime_utc(preparados, formato)
     ), tz = "UTC"))

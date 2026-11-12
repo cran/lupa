@@ -19,7 +19,9 @@ plan. El objeto recibido no se modifica.}
 concordantes por valor determinante para proponer una imputación.}
 
 \item{plan}{Objeto de clase \code{plan_limpieza} o data frame con el mismo
-contrato. Puede filtrarse y editarse antes de aplicarlo.}
+contrato. Puede filtrarse y editarse antes de aplicarlo; una acción cuyos
+parámetros no son la lista con nombres que propone el plan —un vector,
+\code{NULL}— queda \code{fallida} con ese motivo.}
 
 \item{permitir_eliminacion}{Segundo consentimiento obligatorio para ejecutar
 acciones que eliminan filas o columnas. Sin él, una acción eliminatoria
@@ -94,10 +96,14 @@ explícita de conservar los datos. Esto permite separar un grupo aún no
 revisado de una omisión deliberada.
 
 \code{estado} distingue acciones \code{lista}, \code{bloqueada} e \code{informativa}; \code{orden}
-fija la secuencia reproducible. Si dos acciones comparten el mismo \code{orden},
-el empate lo resuelve \code{id_accion}, no la posición de la fila: reordenar el
-plan no cambia el resultado. Y un grupo marcado como \code{elegida} sin ninguna
-acción activa se rechaza, porque no es ni una elección ni una omisión. \code{n_afectadas} es la estimación del perfil
+fija la secuencia reproducible. La acción \code{reparar_codificacion}, cuando está
+seleccionada, tiene precedencia sobre las demás acciones de su misma columna:
+corre primero en esa columna para que las restantes reciban texto ya
+decodificado, aunque su \code{orden} editado sea mayor. No reordena acciones de
+otras columnas. Entre las acciones restantes, y entre empates, el desempate lo resuelve
+\code{id_accion}, no la posición de la fila: reordenar el plan no cambia el
+resultado. Y un grupo marcado como \code{elegida} sin ninguna acción activa se
+rechaza, porque no es ni una elección ni una omisión. \code{n_afectadas} es la estimación del perfil
 sobre \strong{lo que esta acción tocaría}, que puede ser menos que el conteo del
 hallazgo que la originó cuando la acción sólo cubre parte del caso: una
 columna con tres valores de codificación rota, de los cuales uno es
@@ -112,7 +118,10 @@ recibidos.
 \strong{\code{n_afectadas} y \code{n_cambiadas} pueden no coincidir, y las dos son ciertas.}
 La estimación se calcula sobre los datos que se perfilaron; el registro
 cuenta lo que pasó al aplicar. Si una acción anterior del mismo plan ya tocó
-esa columna, la posterior encuentra menos —o más— de lo estimado: con
+esa columna, la posterior encuentra menos —o más— de lo estimado. La única
+excepción de precedencia es \code{reparar_codificacion}, que se adelanta a las
+demás acciones de su columna para que ninguna opere sobre mojibake. Por
+ejemplo, con
 \code{convertir_sentinelas_numericos} (orden 110) convirtiendo tres \code{-999} en
 ausentes, \code{winsorizar_outliers} (orden 520) recorta dos valores donde el plan
 estimaba siete. No es un desvío que ocultar: \code{orden}, \code{n_afectadas} y
@@ -170,15 +179,24 @@ Tres atributos del plan declaran lo que el plan no cubre.
 \code{cobertura_diagnosticos} trae los diagnósticos que el perfil no pudo
 evaluar, para que leer tres acciones no se confunda con "lo demás está
 bien". \code{hallazgos_sin_accion_por_columna_ambigua} trae los hallazgos medidos
-que no produjeron acción porque su columna comparte nombre con otra y no hay
-forma de saber sobre cuál actuaría la limpieza; el remedio es normalizar los
-nombres y volver a perfilar. \code{hallazgos_sin_accion} trae el resto: los
-hallazgos que el perfil midió, con su columna identificada, y que ninguna
-acción del plan atiende —porque el plan no tiene una estrategia para ese
-tipo, o porque la que tiene necesitaba una condición que no se cumplió—. Su
-\code{motivo} dice si la misma columna recibió otras acciones, sin afirmar que
-alguna cubra el hallazgo: eso es una decisión del dominio. Los tres se
-imprimen con el plan.
+que no produjeron acción porque su columna no se puede identificar: comparte
+nombre con otra y no hay forma de saber sobre cuál actuaría la limpieza —el
+remedio es normalizar los nombres y volver a perfilar—, o no está entre las
+columnas del perfil, o no tiene nombre —su nombre es \code{NA}; una columna
+llamada con el texto \code{"NA"} sí lo tiene, y el plan actúa sobre ella—; el
+\code{motivo} dice cuál. Un hallazgo de varias columnas —una relación aritmética en
+\verb{neto,iva,total}, una de orden— no es una columna ambigua: lo es sólo si
+alguna de sus columnas lo es. Sus columnas se leen de la trazabilidad del
+hallazgo y no del texto de \code{columna}: una columna llamada \verb{a,b} no se confunde
+con la relación entre \code{a} y \code{b}. \code{hallazgos_sin_accion}
+trae el resto: los hallazgos que el perfil midió, de una columna
+identificada, de varias o de la tabla, y que ninguna acción del plan atiende
+—porque el plan no tiene una estrategia para ese tipo, o porque la que tiene
+necesitaba una condición que no se cumplió—. Su \code{motivo} dice si la misma
+columna (o esas columnas) recibió otras acciones, sin afirmar que alguna
+cubra el hallazgo: eso es una decisión del dominio. Un hallazgo \code{ok} no
+espera acción y no entra a ninguno de los dos. Los tres se imprimen con el
+plan.
 
 \code{convertir_numero_regional} sólo se recomienda si todos los valores
 presentes comparten convención decimal, unidad y moneda. Un valor con \verb{\%}
@@ -202,12 +220,16 @@ de \verb{©}— no se distingue de uno roto: se acusa, la evidencia del plan lo
 muestra antes de aplicar, y si se aplica la acción se reescribe como la letra
 que esos bytes codifican. Si la columna contiene texto así, no active la
 acción.
-Unos mismos bytes pueden recibir dos diagnósticos: \verb{c2 80} es a la vez un
-carácter de control C1 y la huella de un \verb{€} de Windows-1252 leído como
-latin-1. Cuando el plan propone reparar la codificación y eliminar ese
-control, manda la reparación —corre primero y restituye el \verb{€}—, y la
-eliminación queda sin nada que hacer. Es la lectura habitual en texto real;
-en el caso raro de un control C1 genuino, la reparación lo convierte en \verb{€}.
+Unos mismos bytes pueden parecer un control: el segundo byte de una «Á» mal
+leída es un C1, el de una «í» un guion blando, y \verb{c2 80} es la huella de un
+euro de Windows-1252 leído como latin-1. Lo que la reparación reemplaza no
+cuenta como carácter invisible y ninguna otra acción del plan lo toca:
+aunque se desmarque \code{reparar_codificacion}, la secuencia queda entera y el
+perfil siguiente la sigue encontrando. Lo mismo si el motor no puede reparar
+la celda: sus letras rotas quedan como están. Los controles que la
+reparación deja como están, como un U+0081 suelto o un guion blando fuera de
+una letra rota, se diagnostican y se quitan, también en una celda con
+mojibake. El perfil cuenta un invisible sólo donde la acción puede quitarlo.
 Una celda cuyo texto no se puede leer —declarada \code{bytes} con bytes que no
 son UTF-8, o sin marca en una sesión UTF-8, que es lo que deja \code{\link[=read.csv]{read.csv()}}
 sin \code{fileEncoding} sobre un archivo latin1— no se transforma: el perfil no la
@@ -233,7 +255,10 @@ cambiadas y haría mentir a \code{n_cambiadas} por el otro lado.
 Si se marca una acción que no está \code{lista}, \code{aplicar()} aborta antes de
 modificar la copia y enumera las filas problemáticas. Una acción que sí está
 lista pero falla se registra con su error y no impide aplicar las siguientes:
-cada una conserva atomicidad sobre su propia columna o tabla. Las acciones
+cada una conserva atomicidad sobre su propia columna o tabla. Una acción de
+nombres preparada para otros nombres —un perfil de otra versión de la tabla,
+con dos \code{x} donde los datos tienen una— es una de esas: queda \code{fallida} con el
+motivo, y en un plan armado con \code{datos} ya sale \code{bloqueada}. Las acciones
 que efectivamente eliminan filas o columnas requieren además
 \code{permitir_eliminacion = TRUE}; una conversión \code{destructiva} requiere selección
 explícita y deja la pérdida cuantificada. Por defecto, el resultado conserva
@@ -338,8 +363,15 @@ con la misma igualdad que el perfil, también con columnas \code{integer64},
 matrices, \code{data.frame} anidados o \code{POSIXlt}; una tabla con columnas de lista
 deja las acciones bloqueadas. Las de columnas duplicadas comparan el
 contenido como el perfil: un factor con nivel \code{NA} y el mismo factor sin ese
-nivel, o un \code{POSIXlt} y su \code{POSIXct}, son la misma columna también al
-aplicar. Marcar no elimina filas. Con las dos columnas
+nivel, un \code{POSIXlt} y su \code{POSIXct}, o dos factores sin orden con los mismos
+niveles en otro orden, son la misma columna también al aplicar. Si alguna
+columna del grupo se llama como otra de la tabla, no se propone acción: el
+hallazgo queda en \code{hallazgos_sin_accion_por_columna_ambigua}, con el
+remedio. Hay una decisión por grupo de columnas iguales, no por par:
+marcarlo, o eliminar las repetidas y conservar la primera del grupo.
+\code{columna_1} nombra la que se conserva, y \code{columna_2} y \code{eliminar}, todas las
+repetidas; el atributo \code{columnas_duplicadas_marcadas} lleva una fila por
+repetida, junto a la primera. Marcar no elimina filas. Con las dos columnas
 incluidas, las marcas distinguen la primera aparición de las repetidas, pero
 no a las repetidas entre sí: en un grupo de tres o más filas un perfil
 posterior sigue contando duplicadas. Para saber si los duplicados siguen en
@@ -387,6 +419,19 @@ también sobre una columna protegida: un marcador del catálogo —\verb{sin dat
 o uno declarado —\verb{SIN REGISTRO}— no es el dato de nadie, y la declaración ya
 se publica en \code{meta$cadenas_ausencia}. Tapados, saldrían \verb{[valor protegido]}
 y \code{aplicar()} registraría \code{fallida} la acción recomendada.
+
+\code{convertir_sentinelas_numericos} convierte los números de
+\code{parametros$valores}. El plan arma la lista con los centinelas que el perfil
+contó en esa columna y con los que se declararon en \code{sentinelas_numericos}:
+un \code{999} dentro de una numeración de 1 a 2000 no es un centinela para
+\code{\link[=perfilar]{perfilar()}}, y la acción no lo convierte. Así, aplicada a los datos del
+perfil, cambia las celdas que \code{n_afectadas} anuncia. La lista se lee de la
+evidencia del hallazgo, que muestra las marcas más frecuentes: si la
+evidencia no alcanza a nombrar todo lo contado —una columna de texto con
+muchas marcas de ausencia distintas—, la lista es el catálogo entero y
+conviene revisarla antes de marcar la acción. También es el catálogo entero
+cuando el perfil se hizo con \code{proteger_datos_personales = TRUE}. Editarla es
+una decisión del usuario, como en la acción de las ausencias textuales.
 }
 \examples{
 datos <- data.frame(categoria = c(" A", "S/D", "B"))

@@ -214,14 +214,14 @@
   }
   if (tipo_resultado == "booleano" && orientacion == "no_aplica") {
     .detener(
-      "Una metrica booleana debe declarar orientacion 'conformidad' o 'defecto'.",
+      "Una m\u00e9trica booleana debe declarar orientaci\u00f3n 'conformidad' o 'defecto'.",
       call. = FALSE
     )
   }
   if (!tipo_resultado %in% c("booleano", "real") &&
       orientacion != "no_aplica") {
     .detener(
-      "Una metrica no acotada debe declarar orientacion 'no_aplica'.",
+      "Una m\u00e9trica no acotada debe declarar orientaci\u00f3n 'no_aplica'.",
       call. = FALSE
     )
   }
@@ -234,7 +234,7 @@
   invalidas <- !is.na(orientacion) &
     !orientacion %in% .orientaciones_metricas
   if (any(invalidas)) {
-    .detener("La medicion contiene orientaciones no reconocidas.", call. = FALSE)
+    .detener("La medici\u00f3n contiene orientaciones no reconocidas.", call. = FALSE)
   }
   orientacion
 }
@@ -323,7 +323,7 @@
         "entidad", "atributos", "nombre_instancia", "referencial"
       ))) {
         .detener(
-          "La f\u00e1brica gen\u00e9rica debe especializarse primero; use ",
+          "La f\u00e1brica gen\u00e9rica debe especializarse primero; usar ",
           "metrica()(entidad = ..., atributos = ...).", call. = FALSE
         )
       }
@@ -515,6 +515,13 @@
 #' columna declarada en `columnas_opcionales` de [perfilar()], para medir sobre
 #' el mismo universo que el perfil: con un `NA` y tres `-999` en cuarenta
 #' celdas, 36/39 = 0,923 y no 36/40.
+#' Cuando `valores_nulos` contiene texto, su comparación usa la misma
+#' normalización textual que [perfilar()]: ignora los blancos de los bordes y
+#' no distingue mayúsculas. Así, `""`, `"   "` y un tabulador describen la
+#' misma ausencia cuando se declara `valores_nulos = ""`. Los marcadores que
+#' [perfilar()] reconoce por su cuenta como faltantes disfrazados (`"NA"`,
+#' `"null"`, `-999`) sólo cuentan para `NoNulo` si se declaran en
+#' `valores_nulos`: la métrica mide lo que el modelo declara.
 #' `ValoresPosiblesPorComprension` sigue la misma convención y acepta un
 #' `predicado` o un rango definido por `minimo`, `maximo` e `inclusivo`.
 #'
@@ -813,7 +820,7 @@ instanciar <- function(metrica_especifica, entidad, atributos = character(),
     .detener(
       "En `instanciar()`, `metodo` es la funci\u00f3n que mide. `",
       declaracion$nombre, "` tiene adem\u00e1s una propiedad `metodo`, y las ",
-      "propiedades se fijan al especializar: `especializar(metrica, metodo = ",
+      "propiedades se fijan al especializar: `especializar(m\u00e9trica, metodo = ",
       "...)`.", call. = FALSE
     )
   }
@@ -1034,7 +1041,7 @@ modelo <- function(..., marco = NULL) {
       !(inherits(configuracion$aplicable, "formula") &&
         length(configuracion$aplicable) == 2L)) {
     .detener(
-      "`aplicable` debe ser una formula de un solo lado, como ",
+      "`aplicable` debe ser una f\u00f3rmula de un solo lado, como ",
       "`~ tiene_auto == \"Si\"`.", call. = FALSE
     )
   }
@@ -1102,7 +1109,8 @@ modelo <- function(..., marco = NULL) {
       length(instancia$atributos) != n_atributos) {
     .detener(
       "La m\u00e9trica ", instancia$declaracion$nombre, " requiere ",
-      n_entidades, " entidad(es) y ", n_atributos, " atributo(s).",
+      n_entidades, if (n_entidades == 1L) " entidad y " else " entidades y ",
+      n_atributos, if (n_atributos == 1L) " atributo." else " atributos.",
       call. = FALSE
     )
   }
@@ -1124,7 +1132,7 @@ modelo <- function(..., marco = NULL) {
   reciclar <- function(x) {
     if (length(x) == 1L) rep(x, n) else x
   }
-  data.frame(
+  .data_frame_simple(
     resultado = resultado,
     entidad = reciclar(entidad),
     atributo = reciclar(atributo),
@@ -1161,15 +1169,16 @@ modelo <- function(..., marco = NULL) {
   crudo <- eval(aplicable[[2L]], envir = tabla, enclos = environment(aplicable))
   if (!is.logical(crudo)) {
     .detener(
-      "`aplicable` debe dar un valor logico y dio ", class(crudo)[[1L]], ".",
+      "`aplicable` debe dar un valor l\u00f3gico y dio ", class(crudo)[[1L]], ".",
       call. = FALSE
     )
   }
   if (length(crudo) == 1L) crudo <- rep(crudo, n)
   if (length(crudo) != n) {
     .detener(
-      "`aplicable` dio ", length(crudo), " valores y la entidad `", entidad,
-      "` tiene ", n, " filas.", call. = FALSE
+      "`aplicable` dio ", length(crudo),
+      if (length(crudo) == 1L) " valor y la entidad `" else " valores y la entidad `",
+      entidad, "` tiene ", n, if (n == 1L) " fila." else " filas.", call. = FALSE
     )
   }
   presentes & !is.na(crudo) & crudo
@@ -1211,7 +1220,8 @@ modelo <- function(..., marco = NULL) {
     coincide <- if (es_texto) {
       x_texto <- .texto_analizable(x)$valores
       nulos_texto <- .texto_analizable(valores_nulos)$valores
-      .clave_bytes(x_texto) %in% .clave_bytes(nulos_texto)
+      .minusculas_para_comparar(x_texto) %in%
+        .minusculas_para_comparar(nulos_texto)
     } else {
       .en_conjunto_por_valor(x, valores_nulos)
     }
@@ -1550,6 +1560,55 @@ metricas_nucleo <- function() {
     identical(topenv(environment(metodo)), asNamespace("lupa"))
 }
 
+# Une las salidas crudas de las metricas sin materializar una tabla completa por
+# instancia. Las cinco columnas crudas se conservan hasta conocer el total de
+# filas; las columnas repetidas de la medicion se crean una sola vez y las
+# columnas crudas se concatenan directamente en su destino final. Asi la salida
+# intermedia no duplica metadatos ni queda viva mientras `rbind()` copia todo.
+.unir_salidas_medicion <- function(salidas, instancias, id_medicion, fecha) {
+  cantidades <- vapply(salidas, nrow, integer(1L))
+  total <- sum(cantidades)
+  concatenar <- function(nombre, convertir) {
+    piezas <- lapply(salidas, function(salida) convertir(salida[[nombre]]))
+    unido <- if (length(piezas)) {
+      do.call(c, unname(piezas))
+    } else {
+      convertir(character())
+    }
+    piezas <- NULL
+    # Cada columna ya quedo en la salida final. Soltarla de las salidas crudas
+    # evita que la misma columna siga viva durante la construccion de las otras.
+    for (i in seq_along(salidas)) salidas[[i]][[nombre]] <- NULL
+    unido
+  }
+  repetir_instancia <- function(obtener) {
+    unlist(lapply(seq_along(instancias), function(i) {
+      rep(obtener(instancias[[i]]), cantidades[[i]])
+    }), use.names = FALSE)
+  }
+  resultado <- .data_frame_simple(
+    id_medicion = rep(id_medicion, total),
+    fecha = rep(fecha, total),
+    metrica = repetir_instancia(function(x) x$declaracion$nombre),
+    metrica_especifica = repetir_instancia(function(x) x$nombre_especifico),
+    metrica_instanciada = repetir_instancia(function(x) x$nombre),
+    dimension = repetir_instancia(function(x) x$declaracion$dimension),
+    factor = repetir_instancia(function(x) x$declaracion$factor),
+    orientacion = repetir_instancia(function(x) x$declaracion$orientacion),
+    granularidad = repetir_instancia(function(x) x$declaracion$granularidad),
+    tipo_resultado = repetir_instancia(function(x) x$declaracion$tipo_resultado),
+    entidad = concatenar("entidad", as.character),
+    atributo = concatenar("atributo", as.character),
+    fila = concatenar("fila", as.integer),
+    objeto_medible = concatenar("objeto", as.character),
+    resultado = concatenar("resultado", as.numeric),
+    agregacion = rep(NA_character_, total),
+    stringsAsFactors = FALSE
+  )
+  rownames(resultado) <- NULL
+  resultado
+}
+
 # Con `aplicabilidad`, `medir()` le pasa al metodo la tabla RECORTADA, y un metodo
 # del usuario que escribe `fila` con `which()` publicaba posiciones del recorte:
 # la medicion decia fila 6 cuando habia medido la 9. Se traducen a la tabla del
@@ -1616,7 +1675,8 @@ metricas_nucleo <- function() {
     if (any(salida$fila[filas] > length(originales))) {
       .detener(
         "El m\u00e9todo de ", instancia$nombre, " devolvi\u00f3 una `fila` mayor que ",
-        "las ", length(originales), " filas que recibi\u00f3 de `", entidad,
+        "las ", length(originales),
+        if (length(originales) == 1L) " fila que recibi\u00f3 de `" else " filas que recibi\u00f3 de `", entidad,
         "`: `fila` es la posici\u00f3n en la tabla que recibe el m\u00e9todo.",
         call. = FALSE
       )
@@ -1736,7 +1796,7 @@ metricas_nucleo <- function() {
   if (tipo == "numero_real" &&
       (!is.numeric(resultado) || anyNA(resultado) ||
        any(!is.finite(resultado)))) {
-    .detener("Una m\u00e9trica numero_real debe devolver n\u00fameros finitos.",
+      .detener("Una m\u00e9trica numero_real debe devolver n\u00fameros finitos.",
          call. = FALSE)
   }
   if (tipo == "entero" &&
@@ -1802,7 +1862,8 @@ metricas_nucleo <- function() {
         if (any(filas_entidad[!is.na(filas_entidad)] > tope)) {
           .detener(
             "El m\u00e9todo de ", instancia$nombre, " devolvi\u00f3 una `fila` mayor ",
-            "que las ", tope, " filas de `", entidad, "`: la posici\u00f3n no existe.",
+            "que las ", tope, if (tope == 1L) " fila de `" else " filas de `", entidad,
+            "`: la posici\u00f3n no existe.",
             call. = FALSE
           )
         }
@@ -1888,7 +1949,9 @@ metricas_nucleo <- function() {
   # afirmaria algo que no paso.
   otras <- n_metricas > sum(fallidas)
   .avisar(
-    sum(fallidas), " m\u00e9trica(s) no se midieron porque su m\u00e9todo ",
+    sum(fallidas),
+    if (sum(fallidas) == 1L) " m\u00e9trica no se midi\u00f3 porque su m\u00e9todo " else
+      " m\u00e9tricas no se midieron porque su m\u00e9todo ",
     "fall\u00f3",
     if (otras) "; la corrida sigui\u00f3 con las dem\u00e1s del modelo" else "",
     ". ",
@@ -1988,7 +2051,9 @@ metricas_nucleo <- function() {
       sujeto, " no se pudo medir: el universo aplicable de la entidad `", entidad,
       "` qued\u00f3 vac\u00edo -ninguna de sus ",
       .filas_originales_entidad(tablas_originales, entidad),
-      " filas cumple la regla de `aplicabilidad`-. No hay nada que medir; no es ",
+      if (.filas_originales_entidad(tablas_originales, entidad) == 1L) {
+        " fila cumple la regla de `aplicabilidad`-. No hay nada que medir; no es "
+      } else " filas cumplen la regla de `aplicabilidad`-. No hay nada que medir; no es ",
       "un fallo, es un alcance vac\u00edo."
     )
   } else if (is.null(tabla) || !nrow(tabla)) {
@@ -2007,7 +2072,9 @@ metricas_nucleo <- function() {
     motivo <- paste0(
       sujeto, " no se pudo medir: el universo que la m\u00e9trica declara con ",
       "`aplicable` qued\u00f3 vac\u00edo -ninguna de las ", nrow(tabla),
-      " filas lo cumple-. No hay nada que medir; no es un fallo, es un alcance ",
+      if (nrow(tabla) == 1L) {
+        " fila lo cumple-. No hay nada que medir; no es un fallo, es un alcance "
+      } else " filas lo cumplen-. No hay nada que medir; no es un fallo, es un alcance ",
       "vac\u00edo."
     )
   } else if (length(instancia$atributos)) {
@@ -2158,14 +2225,17 @@ metricas_nucleo <- function() {
     )
   } else {
     paste0(
-      "; las otras ", .formatear_numero_publicado(no_medidas),
-      " no produjeron medida y no cuentan como ",
+      if (no_medidas == 1L) "; la otra " else "; las otras ",
+      .formatear_numero_publicado(no_medidas),
+      if (no_medidas == 1L) " no produjo medida y no cuenta como " else
+        " no produjeron medida y no cuentan como ",
       "incumplimiento",
       # Solo si cierra: un metodo que mide filas FUERA del universo deja menos no
       # medidas que celdas sin valor, y la frase decia "las otras 1 ... (2 de
       # ellas sin valor)".
       if (!is.na(sin_valor) && sin_valor <= no_medidas) {
-        paste0(" (", .formatear_numero_publicado(sin_valor), " de ellas sin valor)")
+        paste0(" (", .formatear_numero_publicado(sin_valor),
+               if (sin_valor == 1L) " de ella sin valor)" else " de ellas sin valor)")
       } else "",
       "."
     )
@@ -2519,39 +2589,15 @@ medir <- function(modelo, datos, id_medicion = NULL, fecha = Sys.time(),
       }
     }
     list(
-      salida = data.frame(
-      id_medicion = rep(id_medicion, n),
-      fecha = rep(fecha, n),
-      metrica = rep(instancia$declaracion$nombre, n),
-      metrica_especifica = rep(instancia$nombre_especifico, n),
-      metrica_instanciada = rep(instancia$nombre, n),
-      dimension = rep(instancia$declaracion$dimension, n),
-      factor = rep(instancia$declaracion$factor, n),
-      orientacion = rep(instancia$declaracion$orientacion, n),
-      granularidad = rep(instancia$declaracion$granularidad, n),
-      tipo_resultado = rep(instancia$declaracion$tipo_resultado, n),
-      entidad = as.character(salida$entidad),
-      atributo = as.character(salida$atributo),
-      fila = as.integer(salida$fila),
-      objeto_medible = as.character(salida$objeto),
-      resultado = as.numeric(salida$resultado),
-      agregacion = rep(NA_character_, n),
-      stringsAsFactors = FALSE
-      ),
+      salida = salida,
       alcance = attr(salida, "alcance", exact = TRUE)
     )
   })
   alcances <- lapply(partes, `[[`, "alcance")
   partes <- lapply(partes, `[[`, "salida")
-  # Sin nombres: `partes` viene nombrada por las instancias, y con esos nombres
-  # `do.call()` arma los de los argumentos y `rbind()` los de las filas -que se
-  # tiran en la linea siguiente-. Dos defectos: R no admite un
-  # nombre de argumento de mas de 10.000 bytes, y una columna con un nombre asi
-  # abortaba `medir()`; y `rbind()` traduce los nombres al nativo, asi que bajo
-  # `C` un id con acento (`NoNulo:a\u00f1o`) avisaba "unable
-  # to translate" en cada medicion y abortaba con `warn = 2`.
-  resultado <- do.call(rbind, unname(partes))
-  rownames(resultado) <- NULL
+  resultado <- .unir_salidas_medicion(
+    partes, modelo$metricas, id_medicion, fecha
+  )
   resultado$id_medida <- .ids_medida(id_medicion, resultado$metrica_instanciada)
   resultado <- resultado[c(
     "id_medida", "id_medicion", "fecha", "metrica", "metrica_especifica",

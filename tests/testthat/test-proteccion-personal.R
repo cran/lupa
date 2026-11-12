@@ -229,7 +229,7 @@ test_that("el HTML protege incluso un analisis originalmente abierto", {
   expect_false(any(vapply(
     crudos, function(valor) grepl(valor, html, fixed = TRUE), logical(1L)
   )))
-  expect_match(html, "estadisticos de orden", fixed = TRUE)
+  expect_match(html, "estad\u00edsticos de orden", fixed = TRUE)
   expect_match(html, "valor_protegido", fixed = TRUE)
   expect_match(html, "rangos y huecos protegidos", fixed = TRUE)
 })
@@ -578,7 +578,7 @@ test_that("el rango de fallecimiento posterior al perfil es un error", {
 })
 
 test_that("extremos exactos integer64 personales tambien se protegen", {
-  skip_if_not_installed("bit64", "4.6.0")
+  skip_if_not_installed("bit64")
   datos <- data.frame(documento = bit64::as.integer64(c(
     "9007199254740993", "9007199254740995", "9007199254740997"
   )))

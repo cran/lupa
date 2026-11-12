@@ -264,7 +264,17 @@ propios valores —o pide \link{sentinelas_naniar}, que es optar por una
 heurística más ancha—, se cuentan todos, incluida la aparición única. Ésa
 es también la forma de recuperar el caso que la reserva calla: declarar el
 valor lo vuelve a contar y además lo saca de los estadísticos del resumen,
-de la ley de Benford y de las relaciones aritméticas.}
+de la ley de Benford, de las relaciones aritméticas, de las dependencias
+funcionales y de las asociaciones que se calculen con \code{\link[=analizar]{analizar()}}. En
+estas relaciones la fila que contiene el valor declarado no se evalúa.
+
+En una columna de texto, una celda es el centinela si el número que
+escribe, leído con la convención de la columna (signo, ceros a la
+izquierda, miles, marca decimal, exponente), es exactamente el valor
+declarado, o si tiene a lo sumo 17 cifras significativas y R lo lee como
+ese valor: \code{"-999"}, \code{"-999.0"} y \code{"-9.99e2"} son el mismo centinela en toda
+plataforma. Un texto con más cifras de las que distingue un doble sólo es el
+centinela si lo escribe exacto.}
 
 \item{cadenas_ausencia}{Cadenas que el usuario declara como ausencia,
 además de la lista incorporada. Lo declarado atraviesa la guarda del
@@ -791,7 +801,114 @@ relativo— en la proporción de \code{umbral_aritmetica}; la evidencia lo dice,
 las descartadas se cuentan en
 \code{meta$aritmetica_columnas$identidades_descartadas_escala}, junto a la
 resolución usada en \code{resolucion_exacta}. Es el mismo
-criterio que el filtro de magnitud de las relaciones de orden.}
+criterio que el filtro de magnitud de las relaciones de orden.
+Con el valor por omisión, una identidad aditiva cuyas tres columnas guardan
+decimales fijos —todos sus valores son múltiplos de un mismo cuanto
+decimal, como los centavos o los enteros— acota la tolerancia a la mitad de
+ese cuanto: entre esos valores una diferencia es un múltiplo del cuanto, y
+la tolerancia relativa tragaba centavos en los importes grandes (un peso
+entero sobre 1e8). La cota se usa si el total guarda exactamente los
+decimales de la suma o si la identidad se cumple exacta, salvo el redondeo
+del tipo double, en la mayoría de las filas, y sólo si los valores tienen
+menos de 15 cifras significativas en ese cuanto —con centavos, hasta
+importes de 1e12; con enteros, hasta 1e14—; por encima la evidencia dice
+que la tolerancia no se acota y cuánto vale. Una identidad que la
+tolerancia relativa reconoce y la cota no se descarta y se cuenta en
+\code{meta$aritmetica_columnas$identidades_descartadas_cuanto}. En una suma la
+tolerancia se mide también sobre los sumandos —\verb{max(1, |observado|, |esperado|, |sumandos|)}—, porque el error de sumar en doble es relativo a
+ellos; si el total queda por debajo de esa tolerancia, la identidad se
+publica sólo si es exacta. Una tolerancia declarada no se acota. En una
+proporcionalidad, con el valor por omisión, una columna con decimales fijos
+cuyo redondeo la tolerancia relativa supera en alguna fila —o cuya relación
+la relativa ya reconoce acusando filas— se lee como la
+respuesta redondeada. Con respuestas más chicas frente a su cuanto, donde la
+relativa no reconoce la relación, se lee igual si hay al menos 20 bases y 20
+respuestas distintas y la relación explica más filas que la moda de la
+respuesta: entre columnas independientes chicas, sin esas dos condiciones,
+la mitad del cuanto publicaba proporcionalidades espurias. En la lectura, la
+mitad de su cuanto —la resolución de su redondeo,
+como 0,05, 0,25 o 5, y no la potencia de diez de sus decimales: primero la
+de todos sus valores y, si con esa no alcanza el criterio, la de al
+menos el 90 \% de las filas, medidas sobre los valores distintos y sin el
+cero —con la cota de azar contada en registros distintos: un registro
+repetido es uno, y cien importes que el redondeo junta en cinco valores
+son cien—; un valor fuera de ella cuenta como discrepante, y unas pocas
+filas con más decimales que las demás no la hacen pasar por cifras
+significativas—, inclusiva, es la tolerancia de
+todas las filas, y \code{k} es la constante en la que cada cifra explica al menos
+una fila más: la de más filas dentro menos cifras —cinco cifras más que
+solo se tragan dos filas rotas de importes grandes no se pagan, y una que
+explica una fila sana sí—, entre las que explican al menos \code{umbral} de las
+filas de la mejor y con al menos una fila por cifra. La recíproca corta
+también es una constante corta: \verb{y ~= x / 7} cuesta la cifra del 7, como
+\code{k} cuesta las suyas, y le gana a \code{0.143}, que dejaba afuera filas sanas;
+con costos iguales gana la forma directa, y una recíproca que termina se
+escribe como ese decimal (\code{1/0.4} es \code{2.5}). En un empate gana la
+más larga solo si cada fila que agrega está en el cuarto de mayor
+magnitud de las que explica o a menos de dos medios cuantos de la corta, no
+pierde ninguna de las de la corta que le quede a menos de esa distancia,
+y la corta no explica exactas las suyas: un
+truncado falla primero las filas grandes y deja afuera otras por un pelo,
+y una fila rota en el medio no
+compra una cifra. Una que explica más filas que otra igual de corta o más
+y pierde algunas de las de esa paga dos veces cada fila que pierde, salvo
+que alguna de las que solo explica ella le quede cerca a la otra. Y una
+corta que explica exactas todas sus filas no la gana ninguna más larga que
+las contiene: con \code{y = 0.18 * x} exacto, \code{1/5.555} se tragaba tres rotas
+grandes. Entre los
+decimales del mismo largo, el que deja más filas justo en el empate del
+redondeo y después el más cercano a la constante de mínimos cuadrados
+(\code{0.0725} y no \code{0.0724} en \code{round(cant * 0.0725, 2)}). Gana otra más larga
+si explica casi todas las filas que esa deja a más de dos medios cuantos
+—todas salvo \code{1 - umbral}, y al menos dos— sin perder ninguna de las que
+esa explica, como un tipo de cambio largo contra su truncado. Si las dos
+columnas admiten esa lectura, con soporte las dos y la tolerancia de una el
+doble o más que la de la otra en la misma columna, se comparan con la fina
+—una fila que solo cae adentro con la gruesa no cuenta— y la gruesa gana
+solo si explica más filas y paga sus cifras, contadas en la fina —las de
+su forma corta, directa o recíproca—; si no, la de la constante claramente
+más corta (\code{1.22} y no \verb{0.8196...}), la que tiene soporte —con cotas
+parecidas, contado en las filas que la gruesa explica con la fina—, la que
+explica más filas pagando sus cifras y la de la resolución más fina, en ese
+orden. Con cotas
+parecidas, cada una cuenta las filas que explica con su propia tolerancia,
+salvo la franja entre las dos: ahí la gruesa cuenta sólo si su redondeo la
+explica mejor que las rotas que caen justo afuera de su ventana, medidas
+con la constante de más cifras de las dos —en
+\code{y = round(x / 1.105)} en enteros la franja es redondeo de \code{y}, uno de cada
+diez residuos, y \verb{x ~= y * 1.105} la acusaba; en \code{y = round(1.22 * x)} con
+rotas por una unidad, la fila de la franja es una rota más—; las filas
+fuera de la retícula de alguna de las dos no cuentan para ninguna, y en la
+gruesa cuentan como explicadas las que caen justo en su medio cuanto, un
+empate del redondeo: \code{y = round(0.9 * x)} se lee \verb{y ~= x * 0.9} sin acusar
+las filas que R redondea al par; con una tolerancia el doble de la otra
+esos empates no cuentan, porque ahí cae una fila corrida un cuanto. Con
+todo igual, la de menos cifras, la que
+acusa más y la directa (\verb{y ~= x * 3.75} y no \verb{x ~= y / 3.75}). La
+que la tolerancia relativa reconoce y ninguna resolución explica se descarta,
+se cuenta en \code{meta$aritmetica_columnas$proporcionalidades_descartadas_cuanto}
+y deja una fila en \code{cobertura_diagnosticos} con la relación y el motivo; si
+la resolución de alguna de las dos columnas es compatible con la relación,
+se publica con la tolerancia relativa. Lo mismo vale para una identidad
+descartada por la cota del cuanto. En cualquier camino, una proporcionalidad
+se sostiene en las filas que distinguen \code{k}: tiene que alcanzar el criterio
+en las filas con la base distinta de cero, donde el par de valores más
+repetido pesa a lo sumo \code{1 - umbral_aritmetica} de ellas, y con al menos
+\code{min_filas_aritmetica} filas fuera de ese par cumpliendo —180 filas en cero,
+o en un mismo par, no hacen una relación con las otras 20—. Las filas en
+cero y las del par más repetido no cuentan como cumplimiento más allá de ese
+tope, así que una relación real con muchas de ellas y más de una fila de
+cada diez rota entre las demás no se publica. Una que alcanza el criterio
+sin ese soporte no deja fila de cobertura —en una tabla rala serían una por
+par de columnas— y se cuenta en
+\code{meta$aritmetica_columnas$proporcionalidades_descartadas_soporte}, también
+cuando una identidad entre las mismas columnas la vuelve redundante.
+Una columna que varía menos que la tolerancia relativa de su magnitud se
+evalúa con la cota del cuanto cuando la identidad la admite; si no, una fila
+de \code{cobertura_diagnosticos} por columna dice qué relación reconocía la
+tolerancia y por qué no se publicó. \code{meta$aritmetica_columnas} se publica
+cuando hay una relación, un recorte o una relación descartada —por escala,
+por la cota del cuanto o por falta de soporte—.}
 
 \item{max_columnas_aritmetica}{Máximo de columnas numéricas que intervienen
 en la búsqueda aritmética, cuyo costo crece cúbicamente. Por omisión es
@@ -844,11 +961,30 @@ parecidas con frecuencias del mismo orden lo activan igual con cuatro filas
 que con quinientas, y en una tabla chica ese reparto sale por casualidad
 más seguido. Es aditivo: encenderlo no cambia ni pierde ninguna
 detección de \code{casi_duplicados_vocabulario}. El límite que deja de cubrir se
-declara igual, encendido o apagado, en \code{n_grupos_sin_variante_rara}.}
+declara igual, encendido o apagado, en \code{n_grupos_sin_variante_rara}. Cada
+par cercano se declara una sola vez: si \code{casi_duplicados_vocabulario} ya
+publicó sus dos formas en un mismo grupo, el par no se cuenta ahí ni se
+publica otra vez como equifrecuente, aunque otra forma cercana cuelgue de
+ese grupo. Pasa con una clase exacta de normalización unida por distancia
+a su vecina, y cuando la asimetría llega a \code{min_asimetria_vocabulario} sin
+pasar \code{max_asimetria_equifrecuente_vocabulario}. La forma que comparten se
+nombra en los dos grupos y cada uno declara sus pares: con \code{Montevideo}
+(100), \code{Montevido} (50) y \code{Montividoo} (50), \code{casi_duplicados_vocabulario}
+publica \code{Montevideo} y \code{Montevido}, y el grupo equifrecuente, \code{Montevido}
+y \code{Montividoo}, con un solo par. Lo que el piso de asimetría deja afuera sí
+se cuenta.}
 
 \item{max_asimetria_equifrecuente_vocabulario}{Razón máxima entre la
 frecuencia mayor y la menor para considerar que dos formas se reparten la
-columna. Con \code{2}, \code{40} contra \code{5} no entra y \code{5} contra \code{5} sí.}
+columna. Con \code{2}, \code{40} contra \code{5} no entra y \code{5} contra \code{5} sí. Las
+grafías que la normalización junta cuentan juntas: \code{MONTEVIDEO} (10) y
+\code{Montevideo} (40) contra \code{Montevido} (50) es un empate, el grupo publica
+las tres formas con sus frecuencias y su asimetría es 1. El tope es del
+grupo, no de cada par: \code{Montevideo} (25), \code{Montevido} (20) y
+\code{Montividoo} (10) están a 1,25 y 2 de a pares, pero a 2,5 de punta a
+punta, y no se agrupan. Sus pares se declaran aparte en la misma fila de
+\code{cobertura_diagnosticos}, como pares cercanos que forman cadenas sobre el
+tope.}
 
 \item{max_comparaciones_dependencias}{Tope de pares determinante-dependiente
 que se comparan. El costo de las dependencias es del orden de
@@ -872,13 +1008,18 @@ las dependencias. Se combina con \code{max_comparaciones_dependencias}; el
 límite efectivo baja cuando hay muchas filas. \code{Inf} desactiva este tope,
 pero no el de pares.}
 
-\item{max_largo_valor_vocabulario}{Maximo de caracteres permitido en cada
-valor que entra en la comparacion de casi duplicados del vocabulario. Por
-defecto es \code{10000}, elegido porque la distancia normalizada deja de
-distinguir de forma estable una diferencia local de muchas diferencias en
-textos largos. Una columna que supera el tope se declara completa fuera
-de alcance en \code{cobertura_diagnosticos}; no se recortan valores en silencio.
-\code{Inf} quita el tope.}
+\item{max_largo_valor_vocabulario}{Maximo de bytes o caracteres permitido en
+cada valor que entra en los diagnosticos textuales costosos. Por defecto es
+\code{10000}, elegido porque las expresiones regulares, la normalizacion y la
+comparacion de textos largos dejan de ser una medida razonable. Los valores
+que superan el tope quedan fuera de esos diagnosticos, se cuentan completos
+para las medidas de la columna y se declaran en \code{cobertura_diagnosticos}.
+\code{Inf} quita el tope. El limite especifico de casi duplicados conserva este
+mismo valor para no ejecutar una distancia sobre cadenas sin presupuesto.
+La inferencia de tipo, los conteos baratos, las dependencias y los
+estadisticos se calculan sobre el universo completo que resulte aplicable.
+Cada diagnostico que omita los valores largos agrega su propia fila de
+cobertura, con \code{dependencia = "texto_largo_no_evaluado"}.}
 
 \item{max_celdas_muestra}{Maximo de celdas que puede contener la muestra
 comun de los diagnosticos que muestrean filas. Por defecto es \code{1000000};
@@ -922,7 +1063,21 @@ corregirse; la evidencia declara cuantas filas mostradas pertenecen a las
 formas variantes y cuantas a las formas dominantes.
 En \code{filas_duplicadas}, el conteo y la traza incluyen todas las filas
 participantes de los grupos; el numero de excedentes queda en la
-evidencia. Cuando el camino
+evidencia. \code{columnas_duplicadas} publica un hallazgo por grupo de
+columnas con el mismo contenido, no uno por par: \code{columna} es la primera
+del grupo en el orden de los datos, la evidencia nombra a todas
+(\code{A = B = C}) y \code{n_afectados} las cuenta a todas. \code{general$columnas_duplicadas}
+tiene una fila por cada columna repetida, con la primera de su grupo en
+\code{columna_1} y la repetida en \code{columna_2}. Dos columnas son iguales si lo
+son en lo que el perfil lee como contenido: un factor con nivel \code{NA} y el
+mismo sin ese nivel, un \code{POSIXlt} y su \code{POSIXct}, o dos factores sin orden
+con los mismos niveles en otro orden son la misma columna; un entero y un
+doble, que el perfil declara de tipos distintos, no. Si algún nombre del
+grupo no se puede leer suelto —vacío, repetido en la tabla, con espacios
+al borde o con \code{=}, \verb{;}, \verb{,} o comillas—, la evidencia cita todos los
+nombres entre comillas, y el que se repite lleva su posición:
+\verb{"X" (columna 1) = "X" (columna 2)}. Sin filas no hay hallazgo ni filas en
+\code{general}: la cobertura declara que no se compararon. Cuando el camino
 no puede conocer un conteo, informa NA, nunca cero. La columna de lista
 \code{trazabilidad} distingue \code{disponible}, \code{truncada}, \code{no_aplica} y
 \code{no_disponible}; cuando corresponde conserva índices de fila acotados por
@@ -978,8 +1133,9 @@ clasificables). Son categorías de evidencia, no veredictos de identidad.
 por diagnóstico que no pudo evaluarse o cuya enumeración quedó parcial y
 las columnas \code{diagnostico},
 \code{columna}, \code{motivo}, \code{como_resolverlo} y \code{dependencia}. Incluye la falta de
-\code{stringdist}, \code{stringi}, \code{bit64} o \code{sf}, incluida la medición de secuencias
-\code{integer64} cuando falta \code{bit64}, y las zonas horarias POSIXt sin declarar.
+\code{stringdist}, \code{stringi} o \code{sf} y las zonas horarias POSIXt sin declarar.
+Sin \code{bit64} una columna \code{integer64} no deja una fila acá: el perfil se
+detiene con \code{lupa_error_integer64}.
 Los patrones de frecuencia intermedia no se consideran desvios
 del patron dominante: \code{patron_raro} es completo respecto de su criterio de
 rareza cuando no hay recorte de trazabilidad. Si el conjunto de nombres
@@ -1099,7 +1255,10 @@ Una columna cuyo año se expresa con dos dígitos se informa con su
 \code{maximo_fecha}, \code{media_fecha} y \code{mediana_fecha} en \code{NA}. No es una omisión:
 \code{23} puede ser 1923 o 2023, y elegir el siglo para calcular un rango sería
 inventarlo. El hallazgo \code{anio_de_dos_digitos} señala esas columnas, y el
-rango aparece una vez que el usuario resuelve la ambigüedad.
+rango aparece una vez que el usuario resuelve la ambigüedad. Si sólo algunos
+valores traen el año con dos dígitos, la columna conserva su rango: esos
+valores quedan fuera, como cualquier valor con más de una lectura, y lo
+declaran \code{n_valores_excluidos_resumen} y \code{"calculados_sobre_valores"}.
 Lo mismo vale para un valor que dos formatos confirmados de la misma columna
 leen distinto: en una columna que tiene \code{13/06/2020} y \code{06/30/2020}, el valor
 \code{01/12/2020} puede ser el 1 de diciembre o el 12 de enero, y no se decide por
@@ -1122,14 +1281,28 @@ del segundo caso son los centinelas que se llevan todos los valores. La
 presencia se define igual que en \code{n_faltantes}, que cuenta el \code{NaN} como
 ausente: una columna de treinta \code{NaN} es \code{"sin_valores"}.
 
-\strong{La \code{media} se acumula por bloques y puede diferir de \code{mean()} en los últimos
-bits; la \code{mediana} es exacta.} El paquete no promete exactitud bit a bit para
-la media —sí para la mediana, que se calcula con \code{median()} sobre el vector
-entero y no como el cuantil 0,5—. Medido: sobre veinte mil
-valores de \code{1e12} y veinte mil de \code{1e-6} la diferencia es de \verb{6,1e-05}, y sobre
-treinta mil valores con signo del orden de \code{1e9} es de \verb{2,3e-10}; con valores de
-magnitud parecida no hay diferencia en ningún bit. Quien rehaga \code{mean()} sobre
-una columna grande y vea otro último dígito está viendo esto y no un error.
+\strong{La \code{media} y el \code{desvio} son los dobles más cercanos de la media y del
+desvío exactos (el desvío con \code{n - 1}); la \code{mediana} es exacta.} La media se
+acumula por bloques con una suma exacta —cada bloque se parte en sumandos que
+se suman sin redondeo—, así que no depende de cómo se agrupen las filas, de
+que los valores se cancelen ni de la precisión con que la plataforma acumula
+\code{sum()}; también es la más cercana cuando es subnormal y cuando la columna
+junta valores de más de 2^900 (8,5e270) con otros diminutos, que se suman
+aparte para que no se pierdan. El desvío sale de la suma de los cuadrados,
+exacta o con una cota de error demostrada, y se elige comparando con
+aritmética exacta contra los puntos medios entre dobles vecinos; si la cota
+no alcanza para decidir, la columna se recorre otra vez con la suma exacta.
+Vale con cuadrados que desbordan (1e200) o que caen en los subnormales. La
+única excepción: en una columna con un valor 2^885 veces menor que el mayor,
+el cuadrado de ese valor entra con una cota, y el desvío puede quedar a un
+ulp sólo si el exacto cae a menos de 2^-1700 relativos de un punto medio (un
+empate, en la práctica). La mediana se calcula con \code{median()} sobre el vector
+entero y no como el cuantil 0,5. \code{mean()} y \code{sd()} no son la referencia:
+pueden quedar a varios ulps. Medido sobre \code{rnorm(2e6)} con \code{set.seed(1)}:
+\code{mean()} a 208 ulps de la media exacta y la \code{media} en la exacta; sobre
+\code{c(-2^51, 1, 2, 2^51)}, \code{0.75}; sobre \code{((1:25) \%\% 7 - 3) * 0.3}, \code{sd()} y el
+desvío en doble a un ulp del exacto. Quien rehaga \code{mean()} o \code{sd()} sobre una
+columna y vea otro último dígito está viendo esto y no un error.
 }
 \section{La unidad viaja al lado de la cifra}{
 
@@ -1209,7 +1382,11 @@ Para números ordinarios, los estadísticos cuantitativos se calculan sólo con
 valores finitos; \code{n_nan}, \code{n_infinito_positivo} y \code{n_infinito_negativo}
 declaran lo excluido. En columnas \code{integer64} que exceden el entero máximo
 representable exactamente por \code{double}, \code{minimo} y \code{maximo} quedan en \code{NA} y
-los extremos exactos se conservan en \code{minimo_exacto} y \code{maximo_exacto}.
+los extremos exactos se conservan en \code{minimo_exacto} y \code{maximo_exacto}. La
+\code{mediana} depende sólo de sus una o dos centrales: se publica si cada una
+cabe exacta en un doble —valor absoluto menor que 2^53— y queda en \code{NA} si
+no. Lo mismo vale para una columna de texto con esos enteros, salvo con
+\code{sentinelas_numericos} declarados, que ese camino no excluye.
 Cuando la conversión de texto deja valores presentes afuera —haya muestreo o
 no, porque la conversión descarta lo que no puede leer en los dos casos—,
 \code{n_valores_excluidos_resumen} y
@@ -1229,8 +1406,9 @@ de \code{media}, \code{mediana}, \code{minimo}, \code{maximo}, \code{desvio} y \
 salen los \code{NA} y las filas que \code{aplicabilidad} deja fuera del universo;
 \code{n_valores_excluidos_resumen} y \code{estado_resumen_cuantitativo} declaran ese
 alcance. Salen también de la ley de Benford y de las relaciones aritméticas,
-que leen la columna como magnitud: la misma celda no puede ser ausencia en
-el resumen y valor en un diagnóstico. La lista por omisión —\code{-9}, \code{-99},
+que leen la columna como magnitud, y las dependencias funcionales y las
+asociaciones no evalúan la fila que los tiene: la misma celda no puede ser
+ausencia en el resumen y valor en un diagnóstico. La lista por omisión —\code{-9}, \code{-99},
 \code{-999}, \code{-9999} y \code{999}— es en cambio una conjetura del paquete: se
 informa como \code{faltantes_disfrazados}
 pero \strong{no} se retira de los resúmenes, porque \code{999} también puede ser un
@@ -1309,7 +1487,10 @@ falla alguna precondición no emite un
 hallazgo: la enumera en \code{cobertura_diagnosticos}. Si aplica,
 \code{meta$benford$resultados} conserva la distribución observada y esperada por
 primer dígito, el chi-cuadrado de Pearson, ocho grados de libertad y el valor
-p; \code{meta$benford$umbrales} publica todos los cortes. Un valor p menor que
+p; si entre los positivos hay valores que el perfil cuenta como faltantes
+disfrazados sin que estén declarados, \code{sin_faltantes_disfrazados} publica la
+misma prueba sin ellos, y el hallazgo dice si la desviación se mantiene o la
+producen ellos. \code{meta$benford$umbrales} publica todos los cortes. Un valor p menor que
 \code{0.01} genera \code{desviacion_benford} como señal descriptiva para revisar, no
 como evidencia de fraude o manipulación. Topes administrativos, redondeos,
 precios psicológicos y subsidios de monto fijo son explicaciones posibles.
@@ -1342,7 +1523,10 @@ evidencia. Una columna \code{integer} se suma en doble: que dos enteros pasen
 \code{.Machine$integer.max} no apaga la relación. Para cada terna se prueban las tres orientaciones de una identidad
 aditiva; esto cubre sumas y sus restas equivalentes sin informar tres veces
 la misma igualdad. En pares proporcionales, \code{k} es la mediana de los cocientes
-finitos cuya base no es cero, pero el cumplimiento se evalúa después también
+finitos cuya base no es cero —salvo cuando la resolución de una columna con
+decimales fijos hace de tolerancia (ver \code{tolerancia_aritmetica}): ahí es la
+constante con menos cifras que deja casi tantas filas dentro de esa
+resolución como la que más—, pero el cumplimiento se evalúa después también
 en las filas con base cero. Si una identidad aditiva ya relaciona una terna,
 se omiten las proporcionalidades redundantes entre su total y sus sumandos;
 se conserva la proporcionalidad entre los dos sumandos. Una regularidad
@@ -1615,7 +1799,18 @@ disponible; también informa cuántas aristas se descartaron por esa regla y
 el tamaño compatible después del filtro. El tamaño máximo usado para el
 límite conserva el componente potencial antes del filtro numérico, para que
 una familia de entidades numeradas no vuelva a presentarse como una sola
-variante; el tamaño compatible se muestra aparte. Para mantener acotado el
+variante; el tamaño compatible se muestra aparte. Ese límite decide sobre
+los grupos que contienen formas con números. Un grupo sin números, que el
+filtro nunca une con una forma que los tenga, se conserva además si el
+mismo límite medido sobre los grupos sin números lo admite: una familia
+numerada no calla una errata de texto de la misma columna. El denominador
+sigue siendo el vocabulario entero de la columna, con las formas con
+números, así que el veredicto es el que la columna daría si la familia no
+se encadenara: una cadena sin números que ocupa una fracción chica del
+vocabulario se publica igual junto a la familia que junto a códigos que no
+se encadenan o a cualquier otro texto. Entonces la
+cobertura dice que el diagnóstico no aplica a las formas con números y la
+evidencia agrega \verb{grupo_maximo sin numeros}. Para mantener acotado el
 perfil, por omisión se evalúan hasta
 5.000 valores distintos y 2.000.000 de pares de unidades normalizadas; si
 se alcanza un límite, la evidencia lo declara y no presenta el resultado
@@ -1644,11 +1839,14 @@ factor: el paquete infiere número. Para eso está \code{columnas_codigo}.
 \code{moda_sobresale_secuencia_entera} es una señal independiente y no
 cambia los tres escudos de forma que dependen de la numeración.
 En una columna \code{integer64}, \code{bit64} se carga de manera diferida para
-registrar sus métodos antes de medir. Si no está instalado, o es anterior a
-4.6.0, \code{perfilar()} no perfila la columna: se niega con la condición
-\code{lupa_error_integer64}, porque sin el método \code{mtfrm.integer64} \code{match()} de
-R iguala entre sí todos los valores negativos, y los distintos, la moda y la
-mediana saldrían mal sin aviso.
+registrar sus métodos antes de medir. Desde \code{bit64} 4.0.5, la versión más
+antigua medida, el perfil es el mismo que con la actual: el paquete empareja
+los valores por su texto, sin depender del método \code{mtfrm.integer64} que
+\code{bit64} registra desde la 4.6.0. Si \code{bit64} no
+está instalado, \code{perfilar()} no perfila la columna: se niega con la
+condición \code{lupa_error_integer64}, porque sin él R lee los valores como los
+bits de un doble e iguala entre sí todos los negativos, y los distintos, la
+moda y la mediana saldrían mal sin aviso.
 Si la columna tiene valores por encima de 2^53, en un doble se redondean y
 la densidad no se mide sobre números redondeados: las cinco medidas públicas
 de la secuencia quedan en \code{NA} y \code{cobertura_diagnosticos} declara que
@@ -1899,6 +2097,12 @@ lee si la columna aporta evidencia de una sola convención; si no la aporta
 número, con punto o con coma por igual: una columna entera de esos valores
 queda \code{texto} y sin resumen, y si son pocos quedan fuera del resumen y lo
 declaran \code{n_valores_excluidos_resumen} y \code{"calculados_sobre_valores"}.
+El resumen lee sólo las formas que la inferencia cuenta como número, también
+en las filas que su muestra no miró: un primer grupo de miles con cero
+adelante —\verb{099.123.456}, un teléfono—, un hexadecimal o un \code{5.} quedan afuera
+y se declaran igual. Un número con moneda o unidad (\verb{USD 1,234.56}, \verb{12 kg})
+no se resume: es un número escrito como texto, y \code{numero_texto_moneda} y
+\code{numero_texto_unidad} publican lo que traía.
 Los prefijos de tres letras separados
 del número, incluso como sufijo, \code{U$S} y los símbolos monetarios se
 conservan como evidencia; \code{monedas_mixtas} informa sus frecuencias sin

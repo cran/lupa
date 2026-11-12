@@ -356,7 +356,7 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 
 
 
-<p>¿Por qué un perfil puede decir que falta la mayor parte de una columna que está completa en todas las filas donde corresponde? Porque nadie le dijo al paquete dónde corresponde.</p>
+<p>¿Por qué un perfil puede decir que falta la mayor parte de una columna completa donde corresponde? Porque nadie le dijo al paquete dónde corresponde.</p>
 <blockquote>
 <p><strong>En esta guía:</strong></p>
 <ul>
@@ -366,19 +366,9 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <li>todo lo que se le puede declarar al paquete, en una sola tabla.</li>
 </ul>
 </blockquote>
-<div id="el-supuesto-que-lupa-hace" class="section level2">
-<h2>El supuesto que <code>lupa</code> hace</h2>
-<p>Todo perfilador de datos asume una forma de tabla. <code>lupa</code> asume tres cosas a la vez:</p>
-<ol style="list-style-type: decimal">
-<li>una fila es un hecho sobre una entidad;</li>
-<li>una columna es un dominio semántico;</li>
-<li>una celda vacía debería tener un valor y no lo tiene.</li>
-</ol>
-<p>Las tres son razonables y ninguna es universal. La tercera es la que hace daño, porque una base administrativa está llena de vacíos legítimos: la celda que no corresponde que tenga valor. Sin declarar nada, <code>lupa</code> cuenta esos vacíos como ausencia y los informa como defecto. El conteo es correcto y la lectura es falsa.</p>
-</div>
 <div id="qué-pasa-si-no-se-declara-nada" class="section level2">
 <h2>Qué pasa si no se declara nada</h2>
-<p>Para que el vacío por diseño se vea entero usamos una encuesta construida acá, con una columna que sólo corresponde a parte de las filas; <code>datos_operativos</code> no tiene ninguna. Pregunta si la persona tiene auto y, sólo si tiene, de qué marca:</p>
+<p>Empezamos por el caso mínimo: una encuesta construida acá, con una columna que sólo corresponde a parte de las filas (<code>datos_operativos</code> no tiene ninguna). Pregunta si la persona tiene auto y, sólo si tiene, de qué marca:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true"></a>tiene_auto &lt;-<span class="st"> </span><span class="kw">rep</span>(<span class="kw">c</span>(<span class="st">&quot;Si&quot;</span>, <span class="st">&quot;No&quot;</span>), <span class="kw">c</span>(<span class="dv">600</span>, <span class="dv">1400</span>))</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true"></a>encuesta &lt;-<span class="st"> </span><span class="kw">data.frame</span>(</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true"></a>  <span class="dt">tiene_auto =</span> tiene_auto,</span>
@@ -391,10 +381,10 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb1-10"><a href="#cb1-10" aria-hidden="true"></a>h[h<span class="op">$</span>tipo_hallazgo <span class="op">==</span><span class="st"> &quot;faltantes&quot;</span>, <span class="kw">c</span>(<span class="st">&quot;columna&quot;</span>, <span class="st">&quot;severidad&quot;</span>, <span class="st">&quot;n_afectados&quot;</span>, <span class="st">&quot;n_evaluados&quot;</span>)]</span>
 <span id="cb1-11"><a href="#cb1-11" aria-hidden="true"></a><span class="co">#&gt;      columna severidad n_afectados n_evaluados</span></span>
 <span id="cb1-12"><a href="#cb1-12" aria-hidden="true"></a><span class="co">#&gt; 3 marca_auto     error        1400        2000</span></span></code></pre></div>
-<p>Falta el 70 % de <code>marca_auto</code>, con severidad <code>error</code>, en una columna que está completa en todas las filas donde corresponde que tenga valor.</p>
+<p>Falta el 70 % de <code>marca_auto</code>, con severidad <code>error</code>. Pero la columna está completa en todas las filas donde corresponde que tenga valor.</p>
 </div>
 <div id="seis-formas-de-tabla-donde-el-vacío-es-la-estructura" class="section level2">
-<h2>Seis formas de tabla donde el vacío es la estructura</h2>
+<h2>6 formas de tabla donde el vacío es la estructura</h2>
 <p>La encuesta no es un caso raro. En estas formas de tabla, los vacíos son parte del diseño:</p>
 <table>
 <colgroup>
@@ -435,9 +425,19 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 </tbody>
 </table>
 </div>
+<div id="el-supuesto-que-lupa-hace" class="section level2">
+<h2>El supuesto que <code>lupa</code> hace</h2>
+<p>Todo perfilador de datos asume una forma de tabla. <code>lupa</code> asume 3 cosas a la vez:</p>
+<ol style="list-style-type: decimal">
+<li>una fila es un hecho sobre una entidad;</li>
+<li>una columna es un dominio semántico;</li>
+<li>una celda vacía debería tener un valor y no lo tiene.</li>
+</ol>
+<p>Las 3 son razonables y ninguna es universal. La tercera es la que hace daño: una base administrativa está llena de vacíos legítimos, celdas donde no corresponde que haya valor. Sin declarar nada, <code>lupa</code> cuenta esos vacíos como ausencia y los informa como defecto. El conteo es correcto y la lectura es falsa.</p>
+</div>
 <div id="la-señal-que-dice-que-hay-algo-para-declarar" class="section level2">
-<h2>La señal que dice que hay algo para declarar</h2>
-<p>El arreglo, que se ve más abajo, exige saber que existe <code>aplicabilidad</code>, el argumento que declara en qué filas corresponde una columna. Quien no lo sabe recibe el informe engañoso y nada más. Por eso el mismo perfil trae otra fila:</p>
+<h2>🔎 La señal que dice que hay algo para declarar</h2>
+<p>El arreglo, que se ve más abajo, exige conocer <code>aplicabilidad</code>: el argumento que declara en qué filas corresponde una columna. Quien no lo conoce recibiría sólo el informe engañoso. Por eso el mismo perfil trae otra fila:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true"></a>estructural &lt;-<span class="st"> </span>h[h<span class="op">$</span>tipo_hallazgo <span class="op">==</span><span class="st"> &quot;posible_ausencia_estructural&quot;</span>, ]</span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true"></a>estructural[, <span class="kw">c</span>(<span class="st">&quot;columna&quot;</span>, <span class="st">&quot;severidad&quot;</span>, <span class="st">&quot;n_afectados&quot;</span>)]</span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true"></a><span class="co">#&gt;      columna severidad n_afectados</span></span>
@@ -451,9 +451,18 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb2-11"><a href="#cb2-11" aria-hidden="true"></a><span class="co">#&gt; list(marca_auto = ~ tiene_auto == &quot;Si&quot;))`. Con la regla declarada, la ausencia fuera de</span></span>
 <span id="cb2-12"><a href="#cb2-12" aria-hidden="true"></a><span class="co">#&gt; ese universo deja de contarse como defecto y el alcance queda escrito en</span></span>
 <span id="cb2-13"><a href="#cb2-13" aria-hidden="true"></a><span class="co">#&gt; `cobertura_diagnosticos`.</span></span></code></pre></div>
-<p>Severidad <code>ok</code>: no es un defecto, es una lectura de la estructura. La evidencia es un hecho medido sobre los datos: qué proporción de las filas queda explicada por el valor de la otra columna, y cuántas de las ausencias caen donde la regla dice que la columna no corresponde, que es lo que cuenta <code>n_afectados</code>. La sugerencia trae la línea exacta que habría que escribir. La decisión sigue siendo nuestra: el paquete no cambia por su cuenta el <em>universo</em> de la columna (las filas donde corresponde que tenga valor; ver el <a href="leer-un-perfil.html#glosario">glosario</a> de <em>Leer un perfil</em>), y las columnas ya declaradas quedan fuera del examen.</p>
-<p>La señal sale por dos caminos. Uno es el de la encuesta: <strong>una columna determina la presencia de otra</strong>, con un cumplimiento de al menos 0,99, y entonces se puede escribir la fórmula. El otro es el reparto: <strong>dos o más columnas se turnan las filas sin pisarse</strong> y entre todas cubren la tabla, que es la forma de los atributos excluyentes por subtipo. Ahí no hay fórmula que ofrecer, porque falta la columna que diga cuál corresponde, y la sugerencia es la honesta: si existe esa columna, <code>aplicabilidad</code>; si no existe y la ausencia es por diseño, <code>columnas_opcionales</code>.</p>
-<p>Y no dispara por cualquier cosa. Si una parte de las filas rompe el patrón, se calla, porque entonces la relación existe y no es una regla, y ofrecer una fórmula sería afirmar de más. El sorteo de abajo pone marca de auto a algunas personas que dicen no tener:</p>
+<p>Severidad <code>ok</code>: no es un defecto, es una lectura de la estructura.</p>
+<ul>
+<li>La evidencia es un hecho medido sobre los datos. Dice qué proporción de las filas queda explicada por el valor de la otra columna. Dice también cuántas ausencias caen donde la regla dice que la columna no corresponde: eso cuenta <code>n_afectados</code>.</li>
+<li>La sugerencia trae la línea exacta que habría que escribir.</li>
+</ul>
+<p>La decisión sigue siendo nuestra. El <em>universo</em> de una columna son las filas donde corresponde que tenga valor (ver el <a href="leer-un-perfil.html#glosario">glosario</a> de <em>Leer un perfil</em>). El paquete no lo cambia por su cuenta, y las columnas ya declaradas quedan fuera del examen.</p>
+<p>La señal sale por 2 caminos:</p>
+<ul>
+<li><strong>Una columna determina la presencia de otra</strong>, con un cumplimiento de al menos 0,99. Es el caso de la encuesta, y se puede escribir la fórmula.</li>
+<li><strong>Las filas se reparten entre 2 o más columnas sin pisarse</strong>, y entre todas cubren la tabla. Es la forma de los atributos excluyentes por subtipo. No hay fórmula que ofrecer, porque falta la columna que diga cuál corresponde. La sugerencia es la honesta: si existe esa columna, <code>aplicabilidad</code>; si no existe y la ausencia es por diseño, <code>columnas_opcionales</code>.</li>
+</ul>
+<p>Y no dispara por cualquier cosa. Si una parte de las filas rompe el patrón, se calla. La relación existe pero no es una regla, y ofrecer una fórmula sería afirmar de más. El sorteo de abajo pone marca de auto a algunas personas que dicen no tener:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true"></a><span class="kw">set.seed</span>(<span class="dv">4</span>)</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true"></a>ruidosa &lt;-<span class="st"> </span>encuesta</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true"></a>fuera &lt;-<span class="st"> </span><span class="kw">sample</span>(<span class="kw">which</span>(ruidosa<span class="op">$</span>tiene_auto <span class="op">==</span><span class="st"> &quot;No&quot;</span>), <span class="dv">200</span>)</span>
@@ -485,9 +494,9 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true"></a><span class="kw">writeLines</span>(<span class="kw">strwrap</span>(</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true"></a>  cobertura_declarada<span class="op">$</span>motivo[cobertura_declarada<span class="op">$</span>columna <span class="op">==</span><span class="st"> &quot;marca_auto&quot;</span>], <span class="dv">88</span></span>
 <span id="cb5-4"><a href="#cb5-4" aria-hidden="true"></a>))</span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true"></a><span class="co">#&gt; La completitud se midió sobre 600 filas aplicables de 2000; la regla declarada es</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true"></a><span class="co">#&gt; La completitud se midió sobre 600 filas aplicables de 2000 filas; la regla declarada es</span></span>
 <span id="cb5-6"><a href="#cb5-6" aria-hidden="true"></a><span class="co">#&gt; `~tiene_auto == &quot;Si&quot;`.</span></span></code></pre></div>
-<p>Cuando la ausencia nunca es defecto y no hay una regla que escribir (el historial con vigencia abierta es el caso típico), alcanza con <code>columnas_opcionales</code>:</p>
+<p>Cuando la ausencia nunca es defecto y no hay regla que escribir, alcanza con <code>columnas_opcionales</code>. El caso típico es el historial con vigencia abierta:</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true"></a>historial &lt;-<span class="st"> </span><span class="kw">data.frame</span>(</span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true"></a>  <span class="dt">id =</span> <span class="dv">1</span><span class="op">:</span><span class="dv">100</span>,</span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true"></a>  <span class="dt">valido_hasta =</span> <span class="kw">c</span>(<span class="kw">rep</span>(<span class="ot">NA</span>, <span class="dv">40</span>), <span class="dv">41</span><span class="op">:</span><span class="dv">100</span>)</span>
@@ -498,11 +507,11 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb6-8"><a href="#cb6-8" aria-hidden="true"></a>)</span>
 <span id="cb6-9"><a href="#cb6-9" aria-hidden="true"></a><span class="kw">sum</span>(<span class="kw">hallazgos</span>(opcional)<span class="op">$</span>tipo_hallazgo <span class="op">==</span><span class="st"> &quot;faltantes&quot;</span>)</span>
 <span id="cb6-10"><a href="#cb6-10" aria-hidden="true"></a><span class="co">#&gt; [1] 0</span></span></code></pre></div>
-<p>Con el 40 % de la columna vacío, el perfil suma además un aviso de severidad <code>ok</code>, <code>regla_silencia_ausencia</code>, que se explica al final de la guía.</p>
+<p>Con el 40 % de la columna vacío, el perfil suma además un aviso de severidad <code>ok</code>: <code>regla_silencia_ausencia</code>. Lo explicamos al final de la guía.</p>
 </div>
 <div id="el-error-simétrico" class="section level2">
 <h2>El error simétrico</h2>
-<p>Declarar el universo hace visible un diagnóstico que sin la declaración no puede existir: el valor que aparece donde la regla dice que no corresponde.</p>
+<p>Declarar el universo hace visible un diagnóstico imposible sin la declaración: el valor que aparece donde la regla dice que no corresponde.</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true"></a>inconsistente &lt;-<span class="st"> </span><span class="kw">data.frame</span>(</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true"></a>  <span class="dt">tiene_auto =</span> <span class="kw">c</span>(<span class="st">&quot;Si&quot;</span>, <span class="st">&quot;No&quot;</span>, <span class="st">&quot;No&quot;</span>, <span class="st">&quot;Si&quot;</span>),</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true"></a>  <span class="dt">marca_auto =</span> <span class="kw">c</span>(<span class="st">&quot;Ford&quot;</span>, <span class="ot">NA</span>, <span class="st">&quot;Fiat&quot;</span>, <span class="st">&quot;VW&quot;</span>),</span>
@@ -519,7 +528,7 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb7-14"><a href="#cb7-14" aria-hidden="true"></a><span class="co">#&gt;      columna  severidad n_afectados</span></span>
 <span id="cb7-15"><a href="#cb7-15" aria-hidden="true"></a><span class="co">#&gt; 2 marca_auto sospechoso           1</span></span>
 <span id="cb7-16"><a href="#cb7-16" aria-hidden="true"></a><span class="kw">writeLines</span>(<span class="kw">strwrap</span>(fuera_de_universo<span class="op">$</span>evidencia, <span class="dv">88</span>))</span>
-<span id="cb7-17"><a href="#cb7-17" aria-hidden="true"></a><span class="co">#&gt; 1 valores presentes fuera del universo aplicable de 2 filas.</span></span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true"></a><span class="co">#&gt; 1 valor presente fuera del universo aplicable de 2 filas.</span></span>
 <span id="cb7-18"><a href="#cb7-18" aria-hidden="true"></a>fuera_de_universo<span class="op">$</span>trazabilidad[[<span class="dv">1</span>]]<span class="op">$</span>indices_fila</span>
 <span id="cb7-19"><a href="#cb7-19" aria-hidden="true"></a><span class="co">#&gt; [1] 3</span></span></code></pre></div>
 <p>La tercera fila declara no tener auto y tiene marca. Es un error en los datos, o en la regla, y sin el universo declarado <code>lupa</code> no puede verlo.</p>
@@ -545,7 +554,7 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 </div>
 <div id="el-formato-largo-perfilar_por" class="section level2">
 <h2>El formato largo: <code>perfilar_por()</code></h2>
-<p>Una tabla en formato largo no es una tabla: son muchas apiladas. Perfilarla entera mezcla dominios que no tienen nada que ver, y el resultado no describe a ninguno. La tabla de abajo apila tres atributos de cada entidad; sus valores se sortean:</p>
+<p>Una tabla en formato largo no es una tabla: son muchas apiladas. Perfilarla entera mezcla dominios que no tienen nada que ver, y el resultado no describe a ninguno. La tabla de abajo apila 3 atributos de cada entidad; sus valores se sortean:</p>
 <div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true"></a><span class="kw">set.seed</span>(<span class="dv">9</span>)</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true"></a>n &lt;-<span class="st"> </span><span class="dv">900</span></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true"></a>atributo &lt;-<span class="st"> </span><span class="kw">rep</span>(<span class="kw">c</span>(<span class="st">&quot;pais&quot;</span>, <span class="st">&quot;edad&quot;</span>, <span class="st">&quot;correo&quot;</span>), <span class="dt">each =</span> n <span class="op">/</span><span class="st"> </span><span class="dv">3</span>)</span>
@@ -581,17 +590,17 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb10-10"><a href="#cb10-10" aria-hidden="true"></a><span class="co">#&gt;                           2                           1                           1 </span></span>
 <span id="cb10-11"><a href="#cb10-11" aria-hidden="true"></a><span class="co">#&gt;       posible_identificador </span></span>
 <span id="cb10-12"><a href="#cb10-12" aria-hidden="true"></a><span class="co">#&gt;                           3</span></span></code></pre></div>
-<p>El argumento <code>clave</code> no es cosmético. Sin la columna de identidad, cada repetición del valor de un atributo se lee como fila duplicada y el diagnóstico de unicidad informa la tabla entera. Si se declara, <code>perfilar()</code> separa la unicidad de la ausencia de nulos: <code>meta$clave</code> conserva ambos estados cuando alguno no queda verificado, y la trazabilidad deja explícita su semántica de R cuando agrupa ausentes.</p>
+<p>El argumento <code>clave</code> no es cosmético. Sin la columna de identidad, cada repetición del valor de un atributo se lee como fila duplicada. Así, el diagnóstico de unicidad informa la tabla entera. Si se declara, <code>perfilar()</code> separa la unicidad de la ausencia de nulos. <code>meta$clave</code> conserva ambos estados cuando alguno no queda verificado, y la trazabilidad deja explícita su semántica de R cuando agrupa ausentes.</p>
 <p>Lo que se descartó queda declarado:</p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true"></a><span class="kw">head</span>(<span class="kw">attr</span>(por_grupo, <span class="st">&quot;cobertura_grupos&quot;</span>), <span class="dv">3</span>)</span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true"></a><span class="co">#&gt;    grupo grupo_perfilado n_filas_grupo</span></span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true"></a><span class="co">#&gt; 1   pais            TRUE           300</span></span>
 <span id="cb11-4"><a href="#cb11-4" aria-hidden="true"></a><span class="co">#&gt; 2   edad            TRUE           300</span></span>
 <span id="cb11-5"><a href="#cb11-5" aria-hidden="true"></a><span class="co">#&gt; 3 correo            TRUE           300</span></span>
-<span id="cb11-6"><a href="#cb11-6" aria-hidden="true"></a><span class="co">#&gt;                                                                            motivo</span></span>
-<span id="cb11-7"><a href="#cb11-7" aria-hidden="true"></a><span class="co">#&gt; 1 Se descartaron 1 columnas enteramente ausentes en este grupo antes de perfilar.</span></span>
-<span id="cb11-8"><a href="#cb11-8" aria-hidden="true"></a><span class="co">#&gt; 2 Se descartaron 1 columnas enteramente ausentes en este grupo antes de perfilar.</span></span>
-<span id="cb11-9"><a href="#cb11-9" aria-hidden="true"></a><span class="co">#&gt; 3 Se descartaron 1 columnas enteramente ausentes en este grupo antes de perfilar.</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true"></a><span class="co">#&gt;                                                                          motivo</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true"></a><span class="co">#&gt; 1 Se descartaron 1 columna enteramente ausente en este grupo antes de perfilar.</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true"></a><span class="co">#&gt; 2 Se descartaron 1 columna enteramente ausente en este grupo antes de perfilar.</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true"></a><span class="co">#&gt; 3 Se descartaron 1 columna enteramente ausente en este grupo antes de perfilar.</span></span>
 <span id="cb11-10"><a href="#cb11-10" aria-hidden="true"></a><span class="co">#&gt;   columnas_descartadas</span></span>
 <span id="cb11-11"><a href="#cb11-11" aria-hidden="true"></a><span class="co">#&gt; 1            valor_num</span></span>
 <span id="cb11-12"><a href="#cb11-12" aria-hidden="true"></a><span class="co">#&gt; 2          valor_texto</span></span>
@@ -599,13 +608,13 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 </div>
 <div id="lo-que-lupa-no-hace" class="section level2">
 <h2>Lo que <code>lupa</code> no hace</h2>
-<p>No infiere el modelo. No mira una tabla y decide por su cuenta que es un entidad-atributo-valor, ni que dos columnas son mutuamente excluyentes. Una heurística de ese tipo fallaría sobre tablas anchas legítimas, y por la misma razón el paquete tampoco adivina claves ni jerarquías.</p>
+<p>No infiere el modelo. No decide por su cuenta que una tabla es entidad-atributo-valor, ni que 2 columnas son mutuamente excluyentes. Una heurística así fallaría sobre tablas anchas legítimas. Por la misma razón, el paquete tampoco adivina claves ni jerarquías.</p>
 <p>El universo lo declara quien conoce el dato. Sin declaración, toda la columna aplica y el resultado es el del principio de esta guía: es la única omisión que no supone nada.</p>
 <p>Lo que sí hace es medir la evidencia y ofrecerla. La diferencia importa: sugerir con la evidencia a la vista deja la decisión donde estaba, y adivinar la mueve.</p>
 </div>
 <div id="y-el-reverso-cuando-la-declaración-tapa-un-problema" class="section level2">
-<h2>Y el reverso: cuando la declaración tapa un problema</h2>
-<p>Una regla declarada puede silenciar algo real. Declarar opcional una columna casi vacía deja el perfil limpio, y quien no lea la cobertura de diagnósticos no se entera de nada:</p>
+<h2>⚠️ Y el reverso: cuando la declaración tapa un problema</h2>
+<p>Una regla declarada puede silenciar algo real. Declarar opcional una columna casi vacía deja el perfil limpio. Quien no lea la cobertura de diagnósticos no se entera de nada:</p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true"></a>casi_vacia &lt;-<span class="st"> </span><span class="kw">data.frame</span>(</span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true"></a>  <span class="dt">x =</span> <span class="kw">c</span>(<span class="kw">rep</span>(<span class="ot">NA_character_</span>, <span class="dv">160</span>), <span class="kw">rep</span>(letters[<span class="dv">1</span><span class="op">:</span><span class="dv">20</span>], <span class="dv">2</span>)),</span>
 <span id="cb12-3"><a href="#cb12-3" aria-hidden="true"></a>  <span class="dt">stringsAsFactors =</span> <span class="ot">FALSE</span></span>
@@ -619,11 +628,11 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb12-11"><a href="#cb12-11" aria-hidden="true"></a><span class="kw">writeLines</span>(<span class="kw">strwrap</span>(silencio<span class="op">$</span>evidencia, <span class="dv">88</span>))</span>
 <span id="cb12-12"><a href="#cb12-12" aria-hidden="true"></a><span class="co">#&gt; Faltan 160 de 200 celdas de la columna (80.0 %), y la columna se declaró con</span></span>
 <span id="cb12-13"><a href="#cb12-13" aria-hidden="true"></a><span class="co">#&gt; `columnas_opcionales`: la ausencia no es defecto en esta columna.</span></span></code></pre></div>
-<p>Con el 80 % de la columna vacío, el aviso es <code>regla_silencia_ausencia</code>, el mismo que apareció en el historial. También es <code>ok</code>, y por la misma razón: la declaración hizo su trabajo. El aviso existe para que eso sea una decisión y no un efecto lateral. Vale igual cuando el universo se declaró con <code>aplicabilidad</code> y la columna sigue casi vacía <em>dentro</em> de ese universo, que es el caso donde la regla resultó más ancha que el universo real.</p>
+<p>Con el 80 % de la columna vacío, el aviso es <code>regla_silencia_ausencia</code>, el mismo que apareció en el historial. También es <code>ok</code>, y por la misma razón: la declaración hizo su trabajo. El aviso existe para que eso sea una decisión y no un efecto lateral. Vale igual cuando el universo se declaró con <code>aplicabilidad</code> y la columna sigue casi vacía <em>dentro</em> de ese universo. Es el caso donde la regla resultó más ancha que el universo real.</p>
 </div>
 <div id="todo-lo-que-se-le-declara-al-paquete" class="section level2">
 <h2>Todo lo que se le declara al paquete</h2>
-<p>El universo de una columna es una de varias cosas que <code>lupa</code> no puede saber mirando los datos. Todas siguen la misma idea: quien conoce el dato lo declara, el paquete lo respeta y deja constancia. Son argumentos de <code>perfilar()</code> (y, por <code>argumentos_perfil</code> o <code>...</code>, de <code>analizar()</code> y de las demás vías de perfilado), salvo la unidad, que viaja con la columna:</p>
+<p>El universo de una columna es una de varias cosas que <code>lupa</code> no puede saber mirando los datos. Todas siguen la misma idea: quien conoce el dato lo declara, y el paquete lo respeta y deja constancia. Son argumentos de <code>perfilar()</code>, salvo la unidad, que viaja con la columna. <code>analizar()</code> y las demás vías de perfilado los reciben por <code>argumentos_perfil</code> o <code>...</code>:</p>
 <table>
 <colgroup>
 <col width="33%"></col>
@@ -656,7 +665,7 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <tr class="even">
 <td>qué números significan “sin dato”</td>
 <td><code>sentinelas_numericos</code></td>
-<td>se cuentan como faltantes disfrazados y salen de media, mediana, mínimo, máximo, desvío y de los cuantiles de <code>analizar()</code></td>
+<td>se cuentan como faltantes disfrazados y salen de media, mediana, mínimo, máximo, desvío y de los cuantiles de <code>analizar()</code>; las dependencias y las asociaciones no evalúan la fila que los tiene</td>
 </tr>
 <tr class="odd">
 <td>qué textos significan “sin dato”</td>
@@ -685,7 +694,7 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 </tr>
 </tbody>
 </table>
-<p>Dos de ellas cambian lo que el perfil calcula, y conviene verlas. Un código de rubro con un valor fuera de catálogo, sin declarar y declarado:</p>
+<p>Conviene ver 2 de ellas, porque cambian lo que el perfil calcula. Primero, un código de rubro con un valor fuera de catálogo, sin declarar y declarado:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true"></a>rubros &lt;-<span class="st"> </span><span class="kw">data.frame</span>(<span class="dt">rubro =</span> <span class="kw">rep</span>(<span class="dv">1</span><span class="op">:</span><span class="dv">19</span>, <span class="dt">length.out =</span> <span class="dv">60</span>))</span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true"></a>rubros<span class="op">$</span>rubro[<span class="kw">c</span>(<span class="dv">5</span>, <span class="dv">9</span>)] &lt;-<span class="st"> </span><span class="dv">99</span></span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true"></a></span>
@@ -699,8 +708,8 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb13-11"><a href="#cb13-11" aria-hidden="true"></a><span class="co">#&gt;   columna minimo maximo    media n_outliers estado_resumen_cuantitativo</span></span>
 <span id="cb13-12"><a href="#cb13-12" aria-hidden="true"></a><span class="co">#&gt; 1   rubro      1     99 12.66667          2                  calculados</span></span>
 <span id="cb13-13"><a href="#cb13-13" aria-hidden="true"></a><span class="co">#&gt; 2   rubro      1     99       NA         NA             omitidos_codigo</span></span></code></pre></div>
-<p>Sin declarar, el código se mide como magnitud: tiene media y el <code>99</code> sale como valor atípico. Declarado, la media no se calcula (<code>omitidos_codigo</code>) y el <code>99</code> sigue a la vista en el máximo, que es donde aparece un código fuera de catálogo.</p>
-<p>Una edad donde <code>999</code> significa “no informada”. <code>999</code> está en la lista que el paquete sospecha por omisión, pero una sospecha sólo se informa: no mueve los números. Declarado, sale del resumen:</p>
+<p>Sin declarar, el código se mide como magnitud: tiene media y el <code>99</code> sale como valor atípico. Declarado, la media no se calcula (<code>omitidos_codigo</code>). El <code>99</code> sigue a la vista en el máximo, que es donde aparece un código fuera de catálogo.</p>
+<p>Después, una edad donde <code>999</code> significa “no informada”. <code>999</code> está en la lista que el paquete sospecha por omisión, pero una sospecha sólo se informa: no mueve los números. Declarado, sale del resumen:</p>
 <div class="sourceCode" id="cb14"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true"></a>edades &lt;-<span class="st"> </span><span class="kw">data.frame</span>(<span class="dt">edad =</span> <span class="kw">c</span>(<span class="dv">34</span>, <span class="dv">51</span>, <span class="dv">999</span>, <span class="dv">27</span>, <span class="dv">999</span>, <span class="dv">45</span>, <span class="dv">62</span>, <span class="dv">999</span>, <span class="dv">38</span>, <span class="dv">29</span>))</span>
 <span id="cb14-2"><a href="#cb14-2" aria-hidden="true"></a></span>
 <span id="cb14-3"><a href="#cb14-3" aria-hidden="true"></a>campos &lt;-<span class="st"> </span><span class="kw">c</span>(<span class="st">&quot;columna&quot;</span>, <span class="st">&quot;n_faltantes_disfrazados&quot;</span>, <span class="st">&quot;media&quot;</span>, <span class="st">&quot;maximo&quot;</span>,</span>
@@ -713,7 +722,7 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb14-10"><a href="#cb14-10" aria-hidden="true"></a><span class="co">#&gt;   columna n_faltantes_disfrazados     media maximo n_valores_excluidos_resumen</span></span>
 <span id="cb14-11"><a href="#cb14-11" aria-hidden="true"></a><span class="co">#&gt; 1    edad                       3 328.30000    999                           0</span></span>
 <span id="cb14-12"><a href="#cb14-12" aria-hidden="true"></a><span class="co">#&gt; 2    edad                       3  40.85714     62                           3</span></span></code></pre></div>
-<p><code>sentinelas_numericos</code> reemplaza la lista entera: declaramos exactamente los valores que valen como “sin dato” en nuestros datos. El paquete trae además <code>sentinelas_naniar</code>, una lista más amplia que se pide de manera explícita, porque valores como <code>66</code>, <code>77</code> y <code>88</code> pueden ser datos legítimos:</p>
+<p><code>sentinelas_numericos</code> reemplaza la lista entera: declaramos exactamente los valores que valen como “sin dato” en nuestros datos. El paquete trae además <code>sentinelas_naniar</code>, una lista más amplia. Se pide de manera explícita, porque valores como <code>66</code>, <code>77</code> y <code>88</code> pueden ser datos legítimos:</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true"></a>codigos &lt;-<span class="st"> </span><span class="kw">data.frame</span>(<span class="dt">codigo =</span> <span class="kw">c</span>(<span class="dv">1</span>, <span class="dv">66</span>, <span class="dv">9999</span>))</span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true"></a><span class="kw">c</span>(</span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true"></a>  <span class="dt">por_omision =</span> <span class="kw">columnas</span>(<span class="kw">perfilar</span>(codigos, <span class="dt">analizar_dependencias =</span> <span class="ot">FALSE</span>))<span class="op">$</span></span>
@@ -724,7 +733,12 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb15-8"><a href="#cb15-8" aria-hidden="true"></a>)</span>
 <span id="cb15-9"><a href="#cb15-9" aria-hidden="true"></a><span class="co">#&gt; por_omision      naniar </span></span>
 <span id="cb15-10"><a href="#cb15-10" aria-hidden="true"></a><span class="co">#&gt;           0           2</span></span></code></pre></div>
-<p>Los detalles de cada declaración (qué se excluye de cada diagnóstico, cómo se reconoce una numeración sin declararla, qué se enmascara) están en el artículo <a href="https://sebollin.github.io/lupa/articles/alcance-y-cobertura.html">Alcance y cobertura</a>.</p>
+<p>El artículo <a href="https://sebollin.github.io/lupa/articles/alcance-y-cobertura.html">Alcance y cobertura</a> trae los detalles de cada declaración:</p>
+<ul>
+<li>qué se excluye de cada diagnóstico;</li>
+<li>cómo se reconoce una numeración sin declararla;</li>
+<li>qué se enmascara.</li>
+</ul>
 </div>
 <div id="resumen" class="section level2">
 <h2>Resumen</h2>
@@ -737,7 +751,7 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 </ul>
 </div>
 <div id="paso-siguiente" class="section level2">
-<h2>Paso siguiente</h2>
+<h2>🧭 Paso siguiente</h2>
 <p><a href="limpiar-con-un-plan.html">6. Limpiar con un plan</a> (<code>vignette(&quot;limpiar-con-un-plan&quot;)</code>): cómo corregir una copia de los datos sin perder el registro de lo que se hizo.</p>
 </div>
 

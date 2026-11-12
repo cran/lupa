@@ -1,3 +1,13 @@
+# La dispersion tambien puede perderse aunque la magnitud absoluta sea comun:
+# si el rango es menor que la raiz del menor doble normal, sus cuadrados caen
+# en subnormales y una suma de cuadrados pierde cifras. Un rango nulo no activa
+# la guarda: una columna constante no necesita cambiar de consulta.
+.rango_requiere_escala <- function(rango) {
+  rango <- suppressWarnings(as.numeric(rango))
+  length(rango) == 1L && is.finite(rango) && rango > 0 &&
+    rango < sqrt(.Machine$double.xmin)
+}
+
 # El orden por bytes (`method = "radix"`) exige que la codificacion este
 # DECLARADA: R rechaza con "Character encoding must be UTF-8, Latin-1 or bytes"
 # una cadena marcada `unknown` que contenga bytes no ASCII, aunque sean UTF-8
@@ -333,7 +343,7 @@
   if (is.null(x) || !length(x)) return("")
   if (is.factor(x)) return(.texto_celda_publicada(as.character(x)))
   if (is.data.frame(x)) return("<data.frame>")
-  if (is.function(x)) return("<funcion>")
+  if (is.function(x)) return("<funci\u00f3n>")
   if (is.list(x)) {
     resultado <- paste(
       vapply(x, .texto_celda_publicada, character(1L)), collapse = "; "
@@ -613,6 +623,126 @@
   salida
 }
 
+# Los nombres compuestos se muestran con comas por compatibilidad, pero una
+# coma tambien puede ser parte de un nombre real. Las salidas nuevas guardan la
+# lista; este parser queda para entradas que aun no la traen.
+.separar_nombres_columnas_historico <- function(texto, sep = ",") {
+  texto <- as.character(texto)
+  if (length(texto) != 1L || is.na(texto) || !nzchar(texto)) {
+    return(character())
+  }
+  partes <- strsplit(texto, sep, fixed = TRUE, useBytes = TRUE)[[1L]]
+  ilegibles <- vapply(partes, .bytes_sin_declarar, logical(1L))
+  if (any(ilegibles) || any(Encoding(partes) == "bytes")) {
+    partes <- gsub("^[ \\t]+", "", partes, perl = TRUE, useBytes = TRUE)
+    partes <- gsub("[ \\t]+$", "", partes, perl = TRUE, useBytes = TRUE)
+    return(partes)
+  }
+  trimws(partes)
+}
+
+.separar_nombres_columnas <- function(texto, nombres, sep = ",") {
+  texto <- as.character(texto)
+  nombres <- as.character(nombres)
+  if (length(texto) != 1L || is.na(texto) || !nzchar(texto)) {
+    return(character())
+  }
+  nombres <- nombres[!is.na(nombres) & nzchar(nombres)]
+  if (!length(nombres)) {
+    return(.separar_nombres_columnas_historico(texto, sep = sep))
+  }
+
+  nombres_originales <- nombres
+  nombres_operativos <- .nombres_para_operar(nombres_originales)
+  texto_operativo <- .nombres_para_operar(texto)
+  longitud_texto <- .nchar_texto_seguro(texto_operativo)[[1L]]
+  if (is.na(longitud_texto)) {
+    return(.separar_nombres_columnas_historico(texto, sep = sep))
+  }
+
+  buscar <- function(separador) {
+    n <- longitud_texto
+    resultados <- list()
+    recorrer <- function(pos, partes) {
+      if (length(resultados) > 20L) return(invisible(NULL))
+      if (pos > n) {
+        resultados[[length(resultados) + 1L]] <<- partes
+        return(invisible(NULL))
+      }
+      restante <- substr(texto_operativo, pos, n)
+      candidatas <- which(startsWith(restante, nombres_operativos))
+      if (!length(candidatas)) return(invisible(NULL))
+      for (indice in candidatas) {
+        siguiente <- pos + .nchar_texto_seguro(
+          nombres_operativos[[indice]]
+        )[[1L]]
+        al_final <- siguiente > n
+        tiene_sep <- !al_final && startsWith(
+          substr(texto_operativo, siguiente, n), separador
+        )
+        if (!al_final && !tiene_sep) next
+        recorrer(
+          if (al_final) n + 1L else siguiente + nchar(separador),
+          c(partes, nombres_originales[[indice]])
+        )
+      }
+      invisible(NULL)
+    }
+    recorrer(1L, character())
+    resultados
+  }
+  candidatas <- unlist(lapply(unique(c(sep, ",", ", ")), buscar),
+                       recursive = FALSE)
+  if (length(candidatas)) {
+    claves <- vapply(candidatas, paste, character(1L), collapse = "\001")
+    candidatas <- candidatas[!duplicated(claves)]
+  }
+  if (length(candidatas) == 1L) return(candidatas[[1L]])
+  if (length(candidatas) > 1L) {
+    return(structure(character(), ambigua = TRUE))
+  }
+  partes <- .separar_nombres_columnas_historico(texto, sep = sep)
+  partes[nzchar(partes)]
+}
+
+.anotar_columnas_cobertura <- function(cobertura, nombres) {
+  if (!is.data.frame(cobertura) || !"columna" %in% names(cobertura)) {
+    return(cobertura)
+  }
+  existentes <- if ("columnas" %in% names(cobertura)) {
+    cobertura$columnas
+  } else {
+    vector("list", nrow(cobertura))
+  }
+  internas <- lapply(seq_len(nrow(cobertura)), function(i) {
+    partes <- if (length(existentes) >= i) existentes[[i]] else NULL
+    if (length(partes)) as.character(partes) else {
+      .separar_nombres_columnas(
+        as.character(cobertura$columna[[i]]), nombres, sep = ","
+      )
+    }
+  })
+  cobertura$columnas <- I(internas)
+  attr(cobertura, "columnas_internas") <- NULL
+  cobertura
+}
+
+.columnas_cobertura <- function(cobertura, indice, nombres) {
+  if ("columnas" %in% names(cobertura)) {
+    internas <- cobertura$columnas
+    if (is.list(internas) && length(internas) >= indice) {
+      return(as.character(internas[[indice]]))
+    }
+  }
+  historico <- .separar_nombres_columnas_historico(
+    as.character(cobertura$columna[[indice]]), sep = ","
+  )
+  if (length(historico)) return(historico)
+  .separar_nombres_columnas(
+    as.character(cobertura$columna[[indice]]), nombres, sep = ","
+  )
+}
+
 # Estos ayudantes extienden la misma política a identificadores que no son
 # nombres de columna: dimensiones, métricas, reglas y fronteras declaradas.
 # Devuelven los originales para que el texto que el usuario escribió siga
@@ -813,28 +943,61 @@
   tryCatch(order(clave), error = function(e) seq_along(x))
 }
 
-# `match()` de base sobre un `integer64` necesita el metodo `mtfrm.integer64`,
-# que `bit64` registra desde la 4.6.0 y solo con R 4.2.0 o posterior: antes R no
-# tenia el generico. Sin el, `match()` compara los bits del `double` subyacente,
-# y todos los negativos de -2^52 a -1 son `NaN` leidos como `double`, asi que
-# base los iguala entre si. Medido el 2026-10-25 en R 4.1.0 con bit64 4.0.5:
-# `perfilar()` conto 4 distintos en una columna de 7, y por bloques la mediana
-# de -3000000001..-3000000005 salio -3000000001. Con R 4.1.0 y bit64 4.8.6
-# `match()` seguia igualandolos.
+# `match()` y `%in%` del paquete: los de base, salvo que un `integer64` se
+# empareja por su texto.
 #
-# El paquete usa `match()` -y `factor()`, `table()` y `%in%`, que lo usan por
-# dentro- en cientos de sitios, asi que no se arregla en cada uno: se exige el
-# entorno en la entrada y se dice por que, en lugar de contar mal en silencio.
+# Eso es lo que hace base con bit64 4.6.0 o posterior: su `mtfrm.integer64()`
+# es `as.character(x)`. Con una version anterior no hay ese metodo, y
+# `mtfrm.default()` aplica `as.vector()`, que quita la clase y deja los bits del
+# `double`, en el que todos los negativos de -2^52 a -1 son `NaN`: base los
+# iguala entre si. Medido en R 4.2.0 con bit64 4.0.5: `match(x, unique(x))`
+# sobre -1, -1, -2, -3, 5 daba 1 1 1 1 4; por bloques `n_distintos` salia 46
+# donde habia 50, y las dependencias funcionales y los hallazgos cambiaban.
 #
-# El metodo se registra al CARGAR `bit64`, y un `integer64` puede llegar sin
-# `bit64` cargado -lo trae `readRDS()`, por ejemplo-: se carga antes de mirar,
+# Llevan el nombre de base dentro del espacio de nombres para que valgan en las
+# mas de mil llamadas del paquete sin reescribir cada una: un recorrido de todas
+# las exportadas encontro 8 sitios que reciben una columna `integer64`, y nada
+# asegura que sean todos. No se exportan ni se registran como metodo, asi que la
+# sesion del usuario no cambia. Se empareja por el texto y no con
+# `bit64::match.integer64()` porque el texto da lo MISMO que base con bit64
+# nuevo tambien cuando el otro argumento no es `integer64` -un `double`, que
+# `match.integer64()` truncaria a entero-, y no pierde cifras por encima de 2^53.
+#
+# No cubren las funciones de base que llaman a `match()` por dentro con el objeto
+# intacto: `merge()` por una clave `integer64` y `factor()` con niveles
+# `integer64` dan distinto segun la version de bit64. El paquete no las llama
+# asi: su unico `merge()` es por una clave de texto y sus `factor()` con niveles
+# los tienen de texto.
+#
+# Llaman a `base::match()` por su nombre: copiar la funcion de base dentro del
+# paquete (`base_match <- base::match`) lleva su `.Internal()` al espacio de
+# nombres, y R CMD check lo marca con un WARNING.
+match <- function(x, table, nomatch = NA_integer_, incomparables = NULL) {
+  if (is.object(x) && inherits(x, "integer64")) x <- as.character(x)
+  if (is.object(table) && inherits(table, "integer64")) {
+    table <- as.character(table)
+  }
+  base::match(x, table, nomatch, incomparables)
+}
+
+`%in%` <- function(x, table) {
+  if (is.object(x) && inherits(x, "integer64")) x <- as.character(x)
+  if (is.object(table) && inherits(table, "integer64")) {
+    table <- as.character(table)
+  }
+  base::match(x, table, 0L) > 0L
+}
+
+# Con el `match()` de arriba, lo unico que una columna `integer64` necesita es
+# `bit64`: sin el no hay `as.character()` que lea sus valores -saldria el texto
+# de los bits-, ni orden, ni nada que los distinga. La version no importa.
+#
+# Un `integer64` puede llegar sin `bit64` cargado -lo trae `readRDS()`, por
+# ejemplo-, y sus metodos se registran al CARGARLO: se carga antes de mirar,
 # como hace el perfil con sus otros metodos (`.bit64_disponible()`). Sin la
-# carga, la guarda se negaba con bit64 4.6 instalado. Y sin `bit64` instalado
-# no hay metodo, asi que tambien se niega.
+# carga, la guarda se negaba con bit64 4.8 instalado.
 .integer64_con_match_confiable <- function() {
-  .bit64_disponible() &&
-    exists("mtfrm", envir = baseenv(), inherits = FALSE) &&
-    !is.null(utils::getS3method("mtfrm", "integer64", optional = TRUE))
+  .bit64_disponible()
 }
 
 # La guarda de entrada: `x` es una tabla o una columna. Con `via_dbi`, la
@@ -853,12 +1016,12 @@
     paste0(" (", paste0("`", columnas, "`", collapse = ", "), ")")
   } else ""
   mensaje <- paste0(
-    "Las columnas `integer64`", nombradas, " necesitan R 4.2.0 y bit64 4.6.0",
-    " o posteriores. Con versiones anteriores, `match()` de R iguala entre s\u00ed",
-    " todos los valores negativos, y los distintos, la moda y la mediana",
-    " saldr\u00edan mal sin aviso. Instale o actualice bit64 desde CRAN; o",
-    " convierta la columna con `as.numeric()` si sus valores no pasan de 2^53, o",
-    " desde una base conecte con `bigint = \"numeric\"`."
+    "Las columnas `integer64`", nombradas, " necesitan el paquete bit64. Sin",
+    " \u00e9l, R lee sus valores como los bits de un `double` e iguala entre s\u00ed",
+    " todos los negativos, y los distintos, la moda y la mediana saldr\u00edan mal",
+    " sin aviso. Instalar bit64 desde CRAN; o convertir la columna con",
+    " `as.numeric()` si sus valores no pasan de 2^53, o desde una base conecte",
+    " con `bigint = \"numeric\"`."
   )
   condicion <- list(message = mensaje, call = NULL)
   class(condicion) <- c("lupa_error_integer64",
@@ -889,7 +1052,7 @@
 .orden_por_bytes <- function(..., na.last = TRUE, decreasing = FALSE,
                              method = "radix") {
   if (!identical(method, "radix")) {
-    .detener("`.orden_por_bytes()` solo ordena con `method = \"radix\"`.", call. = FALSE)
+    .detener("`.orden_por_bytes()` s\u00f3lo ordena con `method = \"radix\"`.", call. = FALSE)
   }
   claves <- lapply(list(...), .clave_de_orden)
   do.call(order, c(unname(claves), list(
@@ -940,22 +1103,210 @@
 # comparan -todas, o un subconjunto de claves-. Corregir un detalle obligaba a
 # acordarse de hacerlo en los dos lados. Los dos nombres se conservan porque
 # dicen cosas distintas en su contexto, pero ahora son envoltorios de esto.
+#
+# Comparar todos los pares era cuadratico en llamadas: con 1.000 columnas,
+# 499.500 llamadas a `.columnas_identicas()`, cada una normalizando las dos
+# columnas otra vez -unos 10 s medidos, iguales o distintas-. Ahora cada columna se
+# normaliza una vez, se agrupa por una huella barata y solo se compara dentro de
+# su grupo, contra un representante de cada clase ya vista. Es exacto por dos
+# propiedades: la huella es la misma para dos columnas que la comparacion da
+# por iguales (nunca separa un par verdadero; si junta dos distintas, la
+# comparacion las separa), y la igualdad es una relacion de equivalencia
+# -`identical()`, o los bits para `integer64`-, asi que igual al representante
+# es igual a toda la clase.
+#
+# Devuelve las clases con dos o mas columnas, como posiciones dentro de
+# `indices`: cada clase en orden creciente y las clases por su primera columna.
+.clases_de_columnas_identicas <- function(datos, indices) {
+  if (length(indices) < 2L) return(list())
+  columnas <- lapply(indices, function(i) .normalizar_columna_igualdad(datos[[i]]))
+  huellas <- vapply(columnas, .huella_columna_identica, character(1L))
+  grupo_de <- match(huellas, unique(huellas))
+  clase <- seq_along(columnas)
+  for (miembros in split(seq_along(columnas), grupo_de)) {
+    if (length(miembros) < 2L) next
+    representantes <- miembros[[1L]]
+    for (k in miembros[-1L]) {
+      igual_a <- 0L
+      for (r in representantes) {
+        if (.columnas_normalizadas_identicas(columnas[[r]], columnas[[k]])) {
+          igual_a <- r
+          break
+        }
+      }
+      if (igual_a) {
+        clase[[k]] <- igual_a
+      } else {
+        representantes <- c(representantes, k)
+      }
+    }
+  }
+  unname(Filter(function(m) length(m) > 1L, split(seq_along(clase), clase)))
+}
+
+# Todos los pares de cada clase, en el orden de `combn()`. Es la forma que
+# consume `detectar_claves()`, que publica para cada clave las demas de su
+# clase.
 .pares_de_columnas_identicas <- function(datos, indices, nombres) {
-  vacio <- data.frame(
+  vacio <- .data_frame_simple(
     columna_1 = character(), columna_2 = character(), stringsAsFactors = FALSE
   )
-  if (length(indices) < 2L) return(vacio)
-  pares <- utils::combn(indices, 2L)
-  iguales <- apply(pares, 2L, function(indice) {
-    .columnas_identicas(datos[[indice[[1L]]]], datos[[indice[[2L]]]])
-  })
-  pares <- pares[, iguales, drop = FALSE]
-  if (!ncol(pares)) return(vacio)
-  data.frame(
-    columna_1 = nombres[pares[1L, ]],
-    columna_2 = nombres[pares[2L, ]],
+  con_pares <- .clases_de_columnas_identicas(datos, indices)
+  if (!length(con_pares)) return(vacio)
+  pares <- do.call(cbind, lapply(con_pares, function(m) utils::combn(m, 2L)))
+  orden <- .orden_por_bytes(pares[1L, ], pares[2L, ])
+  primero <- indices[pares[1L, orden]]
+  segundo <- indices[pares[2L, orden]]
+  .data_frame_simple(
+    columna_1 = nombres[primero],
+    columna_2 = nombres[segundo],
     stringsAsFactors = FALSE
   )
+}
+
+# Cada columna repetida junto a la PRIMERA de su clase, en el orden de los
+# datos: k columnas iguales son k - 1 filas, no k (k - 1) / 2. Es la forma de
+# `duplicated()` y de `.fila_duplicada`, que tambien marcan cada repeticion y
+# no cada par; con dos columnas es la misma fila que daba el par. La clase de
+# cada fila va en el atributo `grupo`, y las posiciones de sus dos columnas en
+# `posicion_1` y `posicion_2`, porque dos columnas pueden llamarse igual y el
+# nombre no alcanza para separar dos clases ni para decir cual es cual.
+.grupos_de_columnas_identicas <- function(datos, indices, nombres) {
+  vacio <- .data_frame_simple(
+    columna_1 = character(), columna_2 = character(), stringsAsFactors = FALSE
+  )
+  attr(vacio, "grupo") <- integer()
+  attr(vacio, "posicion_1") <- integer()
+  attr(vacio, "posicion_2") <- integer()
+  clases <- .clases_de_columnas_identicas(datos, indices)
+  if (!length(clases)) return(vacio)
+  primero <- unlist(lapply(clases, function(m) rep.int(m[[1L]], length(m) - 1L)),
+                    use.names = FALSE)
+  segundo <- unlist(lapply(clases, function(m) m[-1L]), use.names = FALSE)
+  grupo <- rep.int(seq_along(clases), lengths(clases) - 1L)
+  salida <- .data_frame_simple(
+    columna_1 = nombres[indices[primero]],
+    columna_2 = nombres[indices[segundo]],
+    stringsAsFactors = FALSE
+  )
+  attr(salida, "grupo") <- grupo
+  attr(salida, "posicion_1") <- as.integer(indices[primero])
+  attr(salida, "posicion_2") <- as.integer(indices[segundo])
+  salida
+}
+
+# Los grupos de columnas iguales que guarda un perfil en
+# `general$columnas_duplicadas`. Ahi cada columna repetida va junto a la primera
+# de su grupo; un perfil guardado por una version anterior trae, en cambio,
+# todos los pares. La igualdad es una equivalencia, asi que las dos formas dan
+# los mismos grupos si se unen por componentes, y con eso el plan y la deriva
+# leen igual un perfil viejo y uno nuevo. Cada grupo sale en el orden de las
+# columnas del perfil, y los grupos por su primera columna. `grupo` dice a que
+# grupo pertenece cada `clave` (los nombres como los compara el paquete).
+.grupos_columnas_duplicadas_perfil <- function(perfil) {
+  vacio <- list(grupos = list(), claves = character(), grupo = integer())
+  pares <- if (is.list(perfil) && is.list(perfil$general)) {
+    perfil$general$columnas_duplicadas
+  } else NULL
+  if (!is.data.frame(pares) || !nrow(pares) ||
+      !all(c("columna_1", "columna_2") %in% names(pares))) {
+    return(vacio)
+  }
+  extremo_1 <- as.character(pares$columna_1)
+  extremo_2 <- as.character(pares$columna_2)
+  validos <- !is.na(extremo_1) & !is.na(extremo_2)
+  if (!any(validos)) return(vacio)
+  extremo_1 <- extremo_1[validos]
+  extremo_2 <- extremo_2[validos]
+  originales <- c(extremo_1, extremo_2)
+  claves_extremos <- .nombres_para_operar(originales)
+  claves <- unique(claves_extremos)
+  originales <- originales[match(claves, claves_extremos)]
+  n_pares <- length(extremo_1)
+  componente <- .unir_componentes_vocabulario(length(claves), cbind(
+    match(claves_extremos[seq_len(n_pares)], claves),
+    match(claves_extremos[n_pares + seq_len(n_pares)], claves)
+  ))
+  columnas_perfil <- if (is.data.frame(perfil$columnas)) {
+    .nombres_para_operar(as.character(perfil$columnas$columna))
+  } else character()
+  posicion <- match(claves, columnas_perfil)
+  orden <- .orden_por_bytes(posicion, seq_along(claves))
+  # Los grupos se numeran por su primera columna, en ese mismo orden.
+  numero <- match(componente, unique(componente[orden]))
+  grupos <- unname(split(originales[orden], numero[orden]))
+  list(grupos = grupos, claves = claves, grupo = numero)
+}
+
+# Los nombres de un hallazgo `columnas_duplicadas`, del grupo que guarda el
+# perfil. Se busca por `columna`, que es una columna del grupo -la primera en
+# un perfil nuevo, el primer extremo del par en uno viejo- y no por la
+# evidencia, que es prosa y puede estar protegida. Si el perfil no trae los
+# grupos, la evidencia es lo unico que queda: `A = B = C; comparadas...`.
+.miembros_columnas_duplicadas <- function(perfil, hallazgo, grupos = NULL) {
+  if (is.null(grupos)) grupos <- .grupos_columnas_duplicadas_perfil(perfil)
+  g <- .grupo_de_columna_duplicada(grupos, hallazgo$columna[[1L]])
+  if (is.na(g)) NULL else grupos$grupos[[g]]
+}
+
+.grupo_de_columna_duplicada <- function(grupos, columna) {
+  columna <- as.character(columna)
+  if (!length(grupos$grupos) || length(columna) != 1L || is.na(columna)) {
+    return(NA_integer_)
+  }
+  grupos$grupo[match(.nombres_para_operar(columna), grupos$claves)]
+}
+
+.miembros_columnas_duplicadas_evidencia <- function(evidencia) {
+  evidencia <- as.character(evidencia)
+  if (length(evidencia) != 1L || is.na(evidencia)) return(character())
+  # Una evidencia con los nombres entre comillas es la de nombres que no se
+  # pueden partir por " = " -tienen el separador, se repiten o estan vacios-:
+  # no se adivina.
+  if (startsWith(evidencia, "\"")) return(character())
+  tramo <- trimws(sub(";.*$", "", evidencia))
+  partes <- strsplit(tramo, " = ", fixed = TRUE)[[1L]]
+  if (length(partes) < 2L) character() else partes
+}
+
+# Huella para agrupar columnas antes de compararlas. Solo tiene que cumplir una
+# cosa: dos columnas que `.columnas_normalizadas_identicas()` da por iguales
+# tienen la misma huella. Por eso usa nada mas que lo que esa comparacion exige
+# igual -clase, tipo, largo, faltantes- y unos pocos valores, cada uno en una
+# forma que no separa lo que `identical()` junta: `as.character()` da "0" para
+# `0` y para `-0`, y "NA" o "NaN" segun `identical()` los distingue. Un texto
+# solo aporta sus bytes si es ASCII; uno con bytes altos aporta una marca,
+# porque `identical()` puede igualar dos codificaciones del mismo texto (y
+# hacerlo distinto segun el locale), y una clave por bytes las separaria. Un
+# `integer64` aporta sus bits, que es lo que la comparacion mira.
+.huella_columna_identica <- function(x) {
+  n <- length(x)
+  cabeza <- paste(c(typeof(x), class(x), n), collapse = "\r")
+  crudo <- unclass(x)
+  if (!is.atomic(crudo) || !is.null(dim(crudo))) {
+    faltantes <- if (is.list(crudo) && is.null(dim(crudo))) {
+      sum(is.na(crudo))
+    } else NA
+    return(paste(cabeza, faltantes, sep = "\n"))
+  }
+  faltantes <- sum(is.na(crudo))
+  if (!n) return(paste(cabeza, faltantes, sep = "\n"))
+  posiciones <- unique(round(seq(1, n, length.out = min(n, 8L))))
+  muestra <- crudo[posiciones]
+  valores <- if (inherits(x, "integer64")) {
+    as.character(writeBin(as.double(muestra), raw()))
+  } else if (is.character(muestra)) {
+    vapply(muestra, function(s) {
+      if (is.na(s)) return("\001")
+      bytes <- charToRaw(s)
+      marca <- if (identical(Encoding(s), "bytes")) "\002" else ""
+      if (any(bytes > as.raw(0x7f))) paste0(marca, "\003") else paste0(marca, s)
+    }, character(1L), USE.NAMES = FALSE)
+  } else {
+    as.character(muestra)
+  }
+  if (is.factor(x)) valores <- c(valores, length(levels(x)))
+  paste(c(cabeza, faltantes, valores), collapse = "\n")
 }
 
 # `muestra = 1.5` se aceptaba y se perfilaba UNA fila, en silencio. Un usuario
@@ -1237,6 +1588,37 @@
   )
 }
 
+# Una muestra de filas que no se alinea con una periodicidad de los datos. La
+# sistematica de `.muestrear_vector()` toma filas a paso fijo, y un paso que cae
+# justo en el periodo de un panel toma siempre los mismos meses: con 599.995
+# filas y 1e5 de muestra, solo los meses 1 y 7 de cada doce. Aca la tabla se
+# parte en `limite` tramos consecutivos -los de la sistematica- y de cada uno
+# se toma una fila en una posicion que sale de un hash del numero de tramo: el
+# mismo hash entero biyectivo y determinista de las firmas MinHash
+# (`.hash_lsh()`), que no usa el generador de numeros aleatorios de R ni su
+# estado. Conserva lo que la sistematica tenia -una fila por tramo, repartida
+# en toda la tabla, la misma muestra en cada corrida- y la fase de cada fila
+# dentro del periodo queda repartida en vez de fija. Cuesta lo que la muestra,
+# no lo que la tabla.
+.muestrear_filas_dispersas <- function(total, muestra) {
+  limite <- min(total, .validar_muestra(muestra))
+  if (total <= limite) {
+    return(list(
+      valores = seq_len(total), total = total, analizados = total,
+      muestreado = FALSE
+    ))
+  }
+  tramo <- seq_len(limite) - 1
+  inicio <- floor(tramo * total / limite)
+  ancho <- floor((tramo + 1) * total / limite) - inicio
+  desplazamiento <- floor(.hash_lsh(tramo, 1L) / .D32_LSH * ancho)
+  indices <- as.integer(inicio + desplazamiento + 1)
+  list(
+    valores = indices, total = total, analizados = length(indices),
+    muestreado = TRUE
+  )
+}
+
 .es_numerico_pelado <- function(x) {
   # Un numero pelado es un `integer` o un `double` SIN clase declarada. El
   # paquete ya se escribio esta leccion dos veces -en `.n_subnormales()` y aca
@@ -1371,8 +1753,15 @@
   }
   frecuencia <- suppressWarnings(as.numeric(columnas[["frecuencia_moda"]]))
   distintos <- suppressWarnings(as.numeric(columnas[["n_distintos"]]))
-  sin_moda <- !is.na(frecuencia) & !is.na(distintos) &
-    frecuencia == 1 & distintos > 1
+  validos <- if ("n_validos" %in% names(columnas)) {
+    suppressWarnings(as.numeric(columnas[["n_validos"]]))
+  } else rep(NA_real_, nrow(columnas))
+  # Sin `n_distintos` -no se pidio, o su consulta se corto por tiempo- la
+  # frecuencia 1 sobre dos o mas valores validos dice lo mismo: ninguno se
+  # repite. Antes esa columna publicaba como moda el primero del orden.
+  varios <- (!is.na(distintos) & distintos > 1) |
+    (is.na(distintos) & !is.na(validos) & validos > 1)
+  sin_moda <- !is.na(frecuencia) & frecuencia == 1 & varios
   # Tambien en una columna protegida. La proteccion tapa un valor; no cambia
   # el hecho de que no lo hay. Antes la protegida quedaba con el marcador
   # `[valor protegido]` -la misma escritura que una columna que SI tiene moda-
@@ -1416,6 +1805,9 @@
 
 .fechas_civiles_distintas_utc <- function(x) {
   if (!inherits(x, "POSIXt")) return(NA_integer_)
+  # Un `POSIXlt` se cuenta como su `POSIXct`: sus campos son la hora civil de
+  # su propia zona y no se pueden comparar con UTC campo por campo.
+  if (inherits(x, "POSIXlt")) x <- as.POSIXct(x)
   zona <- .zona_horaria_origen(x)
   if (identical(zona, "sin_declarar")) return(NA_integer_)
   presentes <- !is.na(x)
@@ -1769,6 +2161,191 @@
   salida
 }
 
+# La representacion decimal exacta de un doble, como piezas de signo, cifras y
+# escala. Las cifras son enteras en texto; no se usa un doble para comparar dos
+# decimales que pueden diferir despues de la lectura.
+.piezas_decimal <- function(signo, digitos, escala) {
+  digitos <- sub("^0+", "", digitos, perl = TRUE)
+  if (!nzchar(digitos)) {
+    return(list(signo = 0L, digitos = "0", escala = 0L))
+  }
+  escala <- as.integer(escala)
+  if (escala < 0L) {
+    digitos <- paste0(digitos, strrep("0", -escala))
+    escala <- 0L
+  }
+  while (escala > 0L && substr(digitos, nchar(digitos), nchar(digitos)) == "0") {
+    digitos <- substr(digitos, 1L, nchar(digitos) - 1L)
+    escala <- escala - 1L
+  }
+  list(signo = if (signo < 0) -1L else 1L,
+       digitos = digitos, escala = escala)
+}
+
+.piezas_decimal_texto <- function(texto) {
+  if (length(texto) != 1L || is.na(texto)) return(NULL)
+  texto <- as.character(texto)
+  if (!grepl("^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+             texto, perl = TRUE)) {
+    return(NULL)
+  }
+  signo <- if (startsWith(texto, "-")) -1L else 1L
+  cuerpo <- sub("^[+-]", "", texto)
+  exponente <- 0L
+  if (grepl("[eE]", cuerpo, perl = TRUE)) {
+    exponente_texto <- sub("^.*[eE]", "", cuerpo, perl = TRUE)
+    exponente <- suppressWarnings(as.integer(exponente_texto))
+    if (is.na(exponente)) return(NULL)
+    cuerpo <- sub("[eE].*$", "", cuerpo, perl = TRUE)
+  }
+  antes <- sub("\\..*$", "", cuerpo, perl = TRUE)
+  despues <- if (grepl("\\.", cuerpo, perl = TRUE)) {
+    sub("^.*\\.", "", cuerpo, perl = TRUE)
+  } else ""
+  .piezas_decimal(signo, paste0(antes, despues),
+                  nchar(despues, type = "bytes") - exponente)
+}
+
+.multiplicar_entero_decimal <- function(digitos, multiplicador) {
+  cifras <- as.integer(strsplit(digitos, "", fixed = TRUE)[[1L]])
+  salida <- integer(length(cifras))
+  acarreo <- 0L
+  for (i in rev(seq_along(cifras))) {
+    producto <- cifras[[i]] * multiplicador + acarreo
+    salida[[i]] <- producto %% 10L
+    acarreo <- producto %/% 10L
+  }
+  while (acarreo > 0L) {
+    salida <- c(acarreo %% 10L, salida)
+    acarreo <- acarreo %/% 10L
+  }
+  paste0(salida, collapse = "")
+}
+
+.hexadecimal_a_decimal <- function(digitos) {
+  mapa <- c(as.character(0:9), letters[1:6], LETTERS[1:6])
+  salida <- "0"
+  caracteres <- strsplit(digitos, "", fixed = TRUE)[[1L]]
+  for (caracter in caracteres) {
+    salida <- .multiplicar_entero_decimal(salida, 16L)
+    valor <- match(caracter, mapa) - 1L
+    if (valor >= 16L && valor <= 21L) valor <- valor - 6L
+    if (valor > 0L) salida <- .sumar_entero_decimal(salida, valor)
+  }
+  salida
+}
+
+.sumar_entero_decimal <- function(digitos, sumando) {
+  cifras <- as.integer(strsplit(digitos, "", fixed = TRUE)[[1L]])
+  salida <- integer(length(cifras))
+  acarreo <- as.integer(sumando)
+  for (i in rev(seq_along(cifras))) {
+    suma <- cifras[[i]] + acarreo
+    salida[[i]] <- suma %% 10L
+    acarreo <- suma %/% 10L
+  }
+  while (acarreo > 0L) {
+    salida <- c(acarreo %% 10L, salida)
+    acarreo <- acarreo %/% 10L
+  }
+  paste0(salida, collapse = "")
+}
+
+.piezas_decimal_doble <- function(valor) {
+  if (length(valor) != 1L || is.na(valor) || !is.finite(valor)) {
+    return(NULL)
+  }
+  if (valor == 0) return(.piezas_decimal(1L, "0", 0L))
+  if (isTRUE(valor == trunc(valor)) && abs(valor) < 2^63) {
+    return(.piezas_decimal(if (valor < 0) -1L else 1L,
+                           sub("^-", "", .texto_identidad(valor)), 0L))
+  }
+  hexadecimal <- sprintf("%a", valor)
+  signo <- if (startsWith(hexadecimal, "-")) -1L else 1L
+  hexadecimal <- sub("^[+-]", "", hexadecimal)
+  partes <- strsplit(hexadecimal, "p", fixed = TRUE)[[1L]]
+  mantisa <- sub("^0x", "", partes[[1L]])
+  exponente <- suppressWarnings(as.integer(partes[[2L]]))
+  antes <- sub("\\..*$", "", mantisa)
+  despues <- if (grepl("\\.", mantisa, perl = TRUE)) {
+    sub("^.*\\.", "", mantisa, perl = TRUE)
+  } else ""
+  digitos <- .hexadecimal_a_decimal(paste0(antes, despues))
+  desplazamiento <- exponente - 4L * nchar(despues, type = "bytes")
+  if (desplazamiento >= 0L) {
+    for (i in seq_len(desplazamiento)) {
+      digitos <- .multiplicar_entero_decimal(digitos, 2L)
+    }
+    escala <- 0L
+  } else {
+    escala <- -desplazamiento
+    for (i in seq_len(escala)) {
+      digitos <- .multiplicar_entero_decimal(digitos, 5L)
+    }
+  }
+  .piezas_decimal(signo, digitos, escala)
+}
+
+.mismos_decimales <- function(a, b) {
+  !is.null(a) && !is.null(b) && identical(a$signo, b$signo) &&
+    identical(a$digitos, b$digitos) && identical(a$escala, b$escala)
+}
+
+.cifras_significativas_decimal <- function(texto) {
+  base <- sub("[eE].*$", "", texto, perl = TRUE)
+  base <- sub("^[+-]", "", base)
+  digitos <- gsub("[^0-9]", "", base, perl = TRUE)
+  digitos <- sub("^0+", "", digitos, perl = TRUE)
+  if (!nzchar(digitos)) 1L else nchar(digitos, type = "bytes")
+}
+
+# Identifica por la escritura de la celda, no por el doble que quedo despues de
+# leerla. La primera regla compara el decimal con la fraccion exacta del doble;
+# la segunda conserva los literales cortos cuya lectura de R coincide. El
+# resultado es la posicion del centinela declarado, o NA si no coincide.
+.identidades_sentinelas_texto <- function(texto, sentinelas_numericos,
+                                          convencion = NULL,
+                                          valores_leidos = NULL) {
+  texto <- trimws(as.character(texto))
+  salida <- rep(NA_integer_, length(texto))
+  if (!length(texto) || !length(sentinelas_numericos)) return(salida)
+  if (is.null(valores_leidos)) {
+    valores_leidos <- .leer_numeros_texto(texto, convencion)
+  }
+  if (length(valores_leidos) != length(texto)) return(salida)
+  candidatos <- rep(FALSE, length(texto))
+  finitos <- !is.na(valores_leidos) & is.finite(valores_leidos)
+  if (!any(finitos)) return(salida)
+  for (centinela in sentinelas_numericos) {
+    if (is.na(centinela) || !is.finite(centinela)) next
+    diferencia <- abs(valores_leidos - centinela)
+    tolerancia <- 4 * .Machine$double.eps * max(1, abs(centinela))
+    candidatos <- candidatos | (finitos & is.finite(diferencia) &
+                                  diferencia <= tolerancia)
+  }
+  indices <- which(candidatos)
+  if (!length(indices)) return(salida)
+  normalizados <- .normalizar_numeros_texto(texto, convencion)
+  piezas_texto <- lapply(normalizados[indices], .piezas_decimal_texto)
+  piezas_sentinelas <- lapply(sentinelas_numericos, .piezas_decimal_doble)
+  for (j in seq_along(sentinelas_numericos)) {
+    centinela <- sentinelas_numericos[[j]]
+    if (is.na(centinela) || !is.finite(centinela)) next
+    exactos <- vapply(piezas_texto, .mismos_decimales,
+                      logical(1L), b = piezas_sentinelas[[j]])
+    cortos <- vapply(normalizados[indices], function(valor) {
+      !is.null(.piezas_decimal_texto(valor)) &&
+        .cifras_significativas_decimal(valor) <= 17L
+    }, logical(1L))
+    leidos <- !is.na(valores_leidos[indices]) &
+      valores_leidos[indices] == centinela
+    cuales <- exactos | (cortos & leidos)
+    nuevos <- indices[cuales & is.na(salida[indices])]
+    salida[nuevos] <- as.integer(j)
+  }
+  salida
+}
+
 # Que nombres de columna aparecen mas de una vez, comparados por contenido como en
 # el resto del paquete. Marca TODAS las apariciones, no solo las segundas: ninguna
 # de las dos columnas se puede nombrar sin ambiguedad.
@@ -1930,10 +2507,11 @@
   # declarar nada: informar como medido lo que se descarto, que es exactamente lo
   # que el paquete promete no hacer.
   #
-  # `Encoding()` dice `latin1` cuando R conoce la codificacion, y ahi `enc2utf8()`
-  # convierte sin perder nada. Lo que queda invalido despues de eso es texto cuya
-  # codificacion nadie declaro y no se puede adivinar; eso si se descarta, y se
-  # informa en `invalidos` y `posiciones`.
+  # `Encoding()` dice `latin1` cuando R conoce la codificacion. La conversion
+  # comun conserva sus caracteres, incluidos los cinco puntos C1 que no tienen
+  # correspondencia con nombre en Windows-1252. Lo que queda invalido despues
+  # de eso es texto cuya codificacion nadie declaro y no se puede adivinar; eso
+  # si se descarta, y se informa en `invalidos` y `posiciones`.
   # `bytes` no declara una codificacion: declara que R no debe traducir la
   # cadena. Eso es correcto para bytes arbitrarios, pero una cadena marcada asi
   # puede contener UTF-8 valido. En ese caso se puede tratar sin perdida:
@@ -1949,16 +2527,7 @@
   # identificadores. Es la declaracion compartida con la normalizacion y con las
   # acciones de texto, `.declarar_utf8_valido()`: marcar lo `unknown` antes de
   # convertir no cambia nada, porque `enc2utf8()` deja intacto lo que ya es UTF-8.
-  valores <- .declarar_utf8_valido(valores)
-  declarados <- Encoding(valores) %in% c("latin1", "UTF-8")
-  if (any(declarados)) {
-    convertidos <- suppressWarnings(
-      tryCatch(enc2utf8(valores[declarados]), error = function(e) NULL)
-    )
-    if (!is.null(convertidos) && length(convertidos) == sum(declarados)) {
-      valores[declarados] <- convertidos
-    }
-  }
+  valores <- .texto_para_operar(valores)
   invalidos <- !is.na(valores) & !validUTF8(valores)
   posiciones <- which(invalidos)
   if (length(posiciones)) valores[posiciones] <- NA_character_
@@ -2066,8 +2635,45 @@
   # `POSIXct`- salian "duplicadas" en el perfil y en el plan, y `aplicar()` las
   # registraba `fallida` con "dejaron de tener contenido duplicado" sobre la
   # tabla original. La comparacion es una sola, aca.
+  .columnas_normalizadas_identicas(
+    .normalizar_columna_igualdad(x), .normalizar_columna_igualdad(y)
+  )
+}
+
+# Lo que la igualdad de columnas mira es lo que el perfil lee como contenido.
+# A la regla de la entrada -el nivel `NA` es un faltante, un `POSIXlt` es su
+# instante- se suma, solo para comparar columnas entre si, el orden de los
+# niveles de un factor sin orden: el perfil lo lee como texto -mismo tipo
+# declarado, mismos valores, misma moda- y en ninguna salida publica ese orden,
+# asi que `factor(x, levels = c("a", "b"))` y `factor(x, levels = c("b", "a"))`
+# son la misma columna. Con dos columnas asi el perfil no las agrupaba, y
+# `comparar_perfiles()` publicaba `resuelto` un grupo cuyos valores seguian
+# iguales. El tipo si cuenta: un entero y un doble, o un logico y un entero,
+# tienen tipos declarados distintos en el perfil. Y en un factor ordenado el
+# orden de los niveles es el orden de los valores. No se toca la entrada de la
+# tabla: los demas diagnosticos ven el factor como llego.
+.normalizar_columna_igualdad <- function(x) {
   x <- .normalizar_columna_entrada(x)
-  y <- .normalizar_columna_entrada(y)
+  if (is.factor(x) && !is.ordered(x)) x <- .factor_niveles_por_bytes(x)
+  x
+}
+
+# El mismo factor con los niveles en orden de bytes, que no depende del locale.
+# Cambian los codigos, no las etiquetas de ninguna fila.
+.factor_niveles_por_bytes <- function(x) {
+  niveles <- levels(x)
+  orden <- .orden_por_bytes(niveles)
+  if (identical(orden, seq_along(niveles))) return(x)
+  atributos <- attributes(x)
+  codigos <- match(as.integer(x), orden)
+  atributos$levels <- niveles[orden]
+  attributes(codigos) <- atributos
+  codigos
+}
+
+# La comparacion sobre columnas ya normalizadas, para quien normaliza una vez y
+# compara muchas (`.pares_de_columnas_identicas()`).
+.columnas_normalizadas_identicas <- function(x, y) {
   # `identical()` iguala todos los NaN, y un `integer64` negativo ES un NaN en
   # sus bits: `-1` y `-2` salian identicos. Comparar los bits es exacto para
   # `integer64` -los bits son el valor-.
@@ -2118,10 +2724,7 @@
   # (test-N87).
   declarados <- lapply(textos, function(x) !is.na(x) & Encoding(x) == "bytes")
   piezas <- lapply(textos, function(x) {
-    en_latin1 <- !is.na(x) & Encoding(x) == "latin1"
-    if (any(en_latin1)) {
-      x[en_latin1] <- iconv(x[en_latin1], from = "latin1", to = "UTF-8")
-    }
+    x <- .latin1_a_utf8(x)
     Encoding(x) <- "bytes"
     x
   })
@@ -2378,7 +2981,8 @@
   }
   paste0(
     "; medido sobre una muestra de ", .miles_trabajo(analizados), " de ",
-    .miles_trabajo(total), " valores, no sobre la columna entera: los ",
+    .miles_trabajo(total), if (total == 1L) " valor, no sobre la columna entera: los " else
+      " valores, no sobre la columna entera: los ",
     "conteos son de la muestra"
   )
 }
@@ -2445,9 +3049,7 @@
 .comillas_sin_locale_uno <- function(texto, quote) {
   if (is.na(texto)) return("NA")
   if (Encoding(texto) == "bytes") return(encodeString(texto, quote = quote))
-  if (Encoding(texto) == "latin1") {
-    texto <- iconv(texto, from = "latin1", to = "UTF-8")
-  }
+  texto <- .latin1_a_utf8(texto)
   bytes <- as.integer(charToRaw(texto))
   comilla <- if (nzchar(quote)) utf8ToInt(quote) else -1L
   partes <- character()
@@ -2544,7 +3146,11 @@
 # puede decidir es inventar un valor.
 .codigos_decodificables <- function(texto) {
   if (is.na(texto)) return(NULL)
-  if (Encoding(texto) == "latin1") texto <- enc2utf8(texto)
+  if (Encoding(texto) == "latin1") {
+    texto <- .latin1_a_utf8(texto)
+  } else if (Encoding(texto) == "bytes" && validUTF8(texto)) {
+    Encoding(texto) <- "UTF-8"
+  }
   if (validUTF8(texto)) {
     if (Encoding(texto) == "bytes") Encoding(texto) <- "UTF-8"
   } else {
@@ -2584,7 +3190,7 @@
 # texto vive en una constante porque `detectar_discordancias()` escapa por su
 # cuenta -por punto de codigo, solo en la fila que lo necesita- y tiene que
 # decirlo con las mismas palabras.
-.NOTA_ESCAPES <- " [valores escapados para que se vean; en los datos estan sin escapar]"
+.NOTA_ESCAPES <- " [valores escapados para que se vean; en los datos est\u00e1n sin escapar]"
 
 .nota_escapes <- function(x) {
   if (.hay_escapes_al_publicar(x)) .NOTA_ESCAPES else ""
@@ -2625,7 +3231,7 @@
   # intacta no tiene por que cambiar de marca. La igualdad se mide en bytes, sin
   # traducir nada.
   como_texto <- function(v) {
-    declarado <- .declarar_utf8_valido(v, marcas = "unknown")
+    declarado <- .texto_para_operar(v, marcas = "unknown")
     nuevo <- en_texto(declarado)
     a <- nuevo
     b <- declarado
@@ -2708,4 +3314,156 @@
     return("segundos")
   }
   .unidad_declarada(x)
+}
+
+# `data.frame()` cobra un precio fijo por columna aunque la columna ya traiga
+# nombre: cada argumento pasa por `as.data.frame.character()` o
+# `as.data.frame.vector()`, que hacen `deparse1(substitute(x))` para inventarle
+# un nombre que despues se descarta. La fila de cada columna del perfil tiene
+# unas 150 columnas y se arma una vez por columna perfilada: medido sobre la
+# tabla del README, ese deparse y lo que lo rodea eran un tercio de
+# `perfilar()`, y en Windows el costo fijo se multiplica.
+#
+# Esta version arma la tabla directamente cuando todas las columnas tienen
+# nombre y cada una es un vector atomico sin nombres ni dimensiones, sin
+# atributos o con la clase exacta de un `factor`, `Date` o `POSIXct` -las que
+# `data.frame()` guarda tal cual y sabe reciclar-, de largo comun o de largo 1.
+# Para ese caso hace lo mismo que `data.frame()`: corrige los nombres con
+# `make.names(unique = TRUE)`, recicla con `rep(length.out = )` y deja nombres
+# de fila automaticos; una prueba lo compara con `identical()`. Cualquier otra
+# cosa -una columna sin nombre, una lista, un vector con nombres o con otros
+# atributos, una clase propia, largos que no casan, `stringsAsFactors = TRUE`-
+# va a `data.frame()`, que la resuelve o la rechaza con su propio mensaje.
+.data_frame_simple <- function(..., stringsAsFactors = FALSE,
+                               check.names = TRUE) {
+  columnas <- list(...)
+  n_filas <- .filas_data_frame_simple(columnas)
+  if (is.na(n_filas) || !identical(stringsAsFactors, FALSE) ||
+      !(isTRUE(check.names) || isFALSE(check.names))) {
+    return(data.frame(..., stringsAsFactors = stringsAsFactors,
+                      check.names = check.names))
+  }
+  cortas <- lengths(columnas) != n_filas
+  if (any(cortas)) {
+    columnas[cortas] <- lapply(columnas[cortas], rep, length.out = n_filas)
+  }
+  if (check.names) {
+    # `make.names(unique = TRUE)` ordena para desambiguar aunque no haya nada
+    # repetido, y ese orden era casi la mitad de lo que costaba esta funcion.
+    # Sin repetidos el resultado es el de `make.names()` a secas.
+    nombres <- make.names(names(columnas))
+    if (anyDuplicated(nombres)) {
+      nombres <- make.names(names(columnas), unique = TRUE)
+    }
+    names(columnas) <- nombres
+  }
+  list2DF(columnas, nrow = n_filas)
+}
+
+.CLASES_DATA_FRAME_SIMPLE <- list(
+  "factor", c("ordered", "factor"), "Date", c("POSIXct", "POSIXt")
+)
+
+.columna_con_clase_simple <- function(v) {
+  atributos <- attributes(v)
+  clase <- atributos[["class"]]
+  !is.null(clase) && is.null(atributos[["names"]]) &&
+    is.null(atributos[["dim"]]) && is.null(atributos[["dimnames"]]) &&
+    any(vapply(.CLASES_DATA_FRAME_SIMPLE, identical, logical(1L), clase))
+}
+
+# El largo de la tabla si `.data_frame_simple()` puede armarla sin
+# `data.frame()`, o `NA` si no.
+.filas_data_frame_simple <- function(columnas) {
+  nombres <- names(columnas)
+  if (!length(columnas) || is.null(nombres) || anyNA(nombres) ||
+      !all(nzchar(nombres))) {
+    return(NA_integer_)
+  }
+  # Con primitivas primero: casi todas las columnas son vectores sin atributos,
+  # y una funcion por columna costaba mas que lo que se ahorraba.
+  if (!all(vapply(columnas, is.atomic, logical(1L), USE.NAMES = FALSE)) ||
+      any(vapply(columnas, is.null, logical(1L), USE.NAMES = FALSE))) {
+    return(NA_integer_)
+  }
+  con_atributos <- !vapply(lapply(columnas, attributes), is.null, logical(1L),
+                           USE.NAMES = FALSE)
+  if (any(con_atributos) &&
+      !all(vapply(columnas[con_atributos], .columna_con_clase_simple,
+                  logical(1L), USE.NAMES = FALSE))) {
+    return(NA_integer_)
+  }
+  largos <- lengths(columnas, use.names = FALSE)
+  n_filas <- max(largos)
+  if (all(largos == n_filas) || (n_filas > 0L && all(largos %in% c(1L, n_filas)))) {
+    n_filas
+  } else {
+    NA_integer_
+  }
+}
+
+# Lo mismo que `do.call(rbind, filas)` seguido de `rownames(x) <- NULL`.
+#
+# `rbind.data.frame()` paga por pieza y por columna la reconciliacion de
+# factores, matrices y nombres de fila. La tabla de columnas del perfil apila
+# una fila de unas 150 columnas por columna perfilada, y ese apilado era el
+# 3 % de `perfilar()` sobre la tabla del README, creciendo con el ancho.
+#
+# Cuando todas las piezas son `data.frame` sin otros atributos, con al menos una
+# fila, los mismos nombres de columna y columnas atomicas sin atributos, cada
+# columna del resultado es la concatenacion de sus piezas. `rbind()` llega al
+# mismo vector asignando pieza por pieza (`value[[j]][filas] <- pieza`), y eso
+# coerciona en cadena: por eso se exige que el tipo de cada columna sea el mismo
+# en todas las piezas, o que todas sean logicas, enteras o reales -donde
+# coercionar en cadena o de una vez da los mismos valores; con texto no:
+# `TRUE` pasa a `1L` y despues a `"1"`, y de una vez a `"TRUE"`-. Los nombres de
+# fila no se reproducen: se descartan, como lo hace quien la llama. Cualquier
+# otra forma va a `rbind()`.
+.apilar_filas <- function(filas) {
+  columnas <- .columnas_apiladas(filas)
+  if (is.null(columnas)) {
+    resultado <- do.call(rbind, filas)
+    rownames(resultado) <- NULL
+    return(resultado)
+  }
+  list2DF(columnas, nrow = sum(vapply(filas, .row_names_info, integer(1L), 2L)))
+}
+
+.columnas_apiladas <- function(filas) {
+  if (!length(filas) || !is.list(filas)) return(NULL)
+  primera <- filas[[1L]]
+  if (!is.data.frame(primera)) return(NULL)
+  nombres <- names(primera)
+  if (!length(nombres)) return(NULL)
+  tipos <- vector("list", length(filas))
+  for (i in seq_along(filas)) {
+    pieza <- filas[[i]]
+    if (!identical(oldClass(pieza), "data.frame") ||
+        !identical(names(pieza), nombres) ||
+        !setequal(names(attributes(pieza)), c("names", "class", "row.names")) ||
+        .row_names_info(pieza, 2L) < 1L) {
+      return(NULL)
+    }
+    # Sin la clase: `lengths()` sobre un data frame pasa por `[[.data.frame`
+    # columna por columna, y eso era casi todo el costo de esta funcion.
+    contenido <- unclass(pieza)
+    if (any(lengths(contenido, use.names = FALSE) != .row_names_info(pieza, 2L)) ||
+        !all(vapply(lapply(contenido, attributes), is.null, logical(1L),
+                    USE.NAMES = FALSE))) {
+      return(NULL)
+    }
+    tipos[[i]] <- vapply(contenido, typeof, character(1L), USE.NAMES = FALSE)
+  }
+  tipos <- matrix(unlist(tipos, use.names = FALSE), nrow = length(nombres))
+  if (!all(tipos %in% c("logical", "integer", "double", "character"))) {
+    return(NULL)
+  }
+  uniformes <- rowSums(tipos == tipos[, 1L]) == ncol(tipos)
+  numericas <- rowSums(tipos != "character") == ncol(tipos)
+  if (!all(uniformes | numericas)) return(NULL)
+  columnas <- lapply(seq_along(nombres), function(j) {
+    unlist(lapply(filas, .subset2, j), use.names = FALSE)
+  })
+  names(columnas) <- nombres
+  columnas
 }

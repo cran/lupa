@@ -36,6 +36,61 @@
         .nombres_para_operar(protegidas), , drop = FALSE
     ])
   }
+  if (!isTRUE(.memo_columnas_personales$activa)) {
+    return(.clasificar_columnas_personales_tabla(
+      datos, detalle, declaradas, validadores
+    ))
+  }
+  clave <- list(datos, detalle, declaradas, validadores)
+  for (entrada in .memo_columnas_personales$entradas) {
+    if (identical(entrada$clave, clave)) return(entrada$valor)
+  }
+  hubo_condicion <- FALSE
+  valor <- withCallingHandlers(
+    .clasificar_columnas_personales_tabla(datos, detalle, declaradas, validadores),
+    condition = function(condicion) hubo_condicion <<- TRUE
+  )
+  if (!hubo_condicion) {
+    .memo_columnas_personales$entradas <- c(
+      .memo_columnas_personales$entradas, list(list(clave = clave, valor = valor))
+    )
+  }
+  valor
+}
+
+# `analizar()` mide su propuesta de a una metrica (`.medir_y_agregar_por_metrica()`),
+# y cada `medir()` vuelve a clasificar las columnas personales de la MISMA tabla
+# para dejar la marca `datos_personales_sin_proteger`, que existe justamente
+# porque la proteccion esta apagada por omision. Sobre la tabla del README eran
+# cinco clasificaciones identicas, el 16 % de `analizar()`.
+#
+# Mientras dura esa medicion, la clasificacion de una tabla se calcula una vez y
+# se reutiliza para una tabla identica -`identical()`, con las mismas
+# declaraciones y validadores-: es una funcion de esas entradas y nada mas. Solo
+# se guarda la que corrio sin dejar escapar ninguna condicion, para que lo que
+# una clasificacion avisaba se siga avisando en cada llamada. Fuera de esa
+# medicion la memoria esta apagada y no guarda nada.
+.memo_columnas_personales <- new.env(parent = emptyenv())
+.memo_columnas_personales$activa <- FALSE
+.memo_columnas_personales$entradas <- list()
+
+# Devuelve TRUE si la encendio esta llamada, que entonces es la que la apaga:
+# una medicion anidada en otra usa la memoria de la de afuera.
+.encender_memo_columnas_personales <- function() {
+  if (isTRUE(.memo_columnas_personales$activa)) return(FALSE)
+  .memo_columnas_personales$activa <- TRUE
+  .memo_columnas_personales$entradas <- list()
+  TRUE
+}
+
+.apagar_memo_columnas_personales <- function() {
+  .memo_columnas_personales$activa <- FALSE
+  .memo_columnas_personales$entradas <- list()
+  invisible(NULL)
+}
+
+.clasificar_columnas_personales_tabla <- function(datos, detalle, declaradas,
+                                                  validadores) {
   validadores <- .normalizar_validadores_personales(validadores)
   # La misma forma declarativa que perfilar(): nombres de columna sueltos, o
   # `columna = "tipo"`. Que las dos puertas acepten lo mismo es lo que permite
@@ -269,7 +324,7 @@
   posicion_valor[.orden_seguro(originales)] <- seq_along(originales)
   orden <- .orden_por_bytes(-conteos, posicion_valor)
   seleccion <- utils::head(orden, max_valores)
-  tabla <- data.frame(
+  tabla <- .data_frame_simple(
     valor = if (protegida) rep("[valor protegido]", length(seleccion)) else {
       representantes[seleccion]
     },
@@ -437,7 +492,7 @@ distribucion_valores <- function(datos, perfil = NULL, max_valores = 20L,
       )]
     }
     meta <- resumen$meta
-    alcance[[i]] <- data.frame(
+    alcance[[i]] <- .data_frame_simple(
       columna = nombre, n_total = NROW(datos[[i]]),
       n_analizados = as.numeric(meta[["analizados"]]),
       n_distintos_muestra = as.numeric(meta[["distintos"]]),
@@ -515,7 +570,7 @@ distribucion_valores <- function(datos, perfil = NULL, max_valores = 20L,
     columna = character(), rango = integer(), valor = character(),
     frecuencia = integer(), proporcion = numeric(), stringsAsFactors = FALSE
   )
-  vacia_q <- data.frame(
+  vacia_q <- .data_frame_simple(
     columna = character(), probabilidad = numeric(), valor = numeric(),
     n_analizados = integer(), muestreado = logical(), estado = character(),
     stringsAsFactors = FALSE
@@ -636,6 +691,10 @@ distribucion_valores <- function(datos, perfil = NULL, max_valores = 20L,
 #' @param max_pares Máximo de asociaciones devueltas después de ordenar.
 #' @param metodo_numerico Medida entre columnas numéricas: `"pearson"` por
 #'   omisión, o `"spearman"` para asociación monótona sobre los rangos.
+#' @param sentinelas_numericos Vector de valores declarados como ausencia. La
+#'   fila de un par que contiene un valor declarado no se usa para medirlo,
+#'   igual que una fila con `NA`; por eso `n_pares` cuenta sólo las filas
+#'   completas restantes. La lista por omisión no se considera una declaración.
 #'
 #' @return Data frame S3 `asociaciones_columnas`. Sus atributos declaran filas,
 #'   columnas y pares examinados, omisiones por dependencia y truncamiento.
@@ -653,16 +712,21 @@ distribucion_valores <- function(datos, perfil = NULL, max_valores = 20L,
 detectar_asociaciones <- function(datos, dependencias = NULL, umbral = 0.3,
                                   muestra = 1e4, max_columnas = 50L,
                                   max_niveles = 50L, max_pares = 500L,
-                                  metodo_numerico = c("pearson", "spearman")) {
+                                  metodo_numerico = c("pearson", "spearman"),
+                                  sentinelas_numericos = NULL) {
   metodo_numerico <- .elegir_opcion(metodo_numerico)
   .validar_datos_tabla(datos)
   datos <- .tabla_base(datos)
+  .validar_sentinelas_numericos(sentinelas_numericos, permitir_nulo = TRUE)
+  datos <- .enmascarar_sentinelas_relacion(
+    datos, sentinelas_numericos
+  )
   if (!is.null(dependencias) && !inherits(dependencias, "data.frame")) {
     .detener("`dependencias` debe ser NULL o un data frame.", call. = FALSE)
   }
   if (!is.numeric(umbral) || length(umbral) != 1L || is.na(umbral) ||
       !is.finite(umbral) || umbral < 0 || umbral > 1) {
-    .detener("`umbral` debe ser una proporcion finita en [0, 1].", call. = FALSE)
+    .detener("`umbral` debe ser una proporci\u00f3n finita en [0, 1].", call. = FALSE)
   }
   limite <- .validar_muestra(muestra)
   max_columnas <- .validar_entero_positivo(max_columnas, "max_columnas")
@@ -742,33 +806,33 @@ detectar_asociaciones <- function(datos, dependencias = NULL, umbral = 0.3,
           columna_1 = a, columna_2 = b, tipo_1 = tipos[[i]],
           tipo_2 = tipos[[j]], metodo = metodo,
           n_pares_completos = as.integer(n_completos),
-          motivo = "La medida de asociacion no fue finita.",
+          motivo = "La medida de asociaci\u00f3n no fue finita.",
           stringsAsFactors = FALSE
         )
         next
       }
       if (valor < umbral) next
       k <- k + 1L
-      filas[[k]] <- data.frame(
+      filas[[k]] <- .data_frame_simple(
         columna_1 = a, columna_2 = b, tipo_1 = tipos[[i]], tipo_2 = tipos[[j]],
         metodo = metodo,
         supuesto = switch(
           metodo,
           pearson_absoluto =
-            "Las columnas numericas se tratan como cuantitativas; la escala no queda confirmada.",
+            "Las columnas num\u00e9ricas se tratan como cuantitativas; la escala no queda confirmada.",
           spearman_absoluto = paste(
-            "Se mide asociacion monotona sobre los rangos: no supone",
+            "Se mide asociaci\u00f3n mon\u00f3tona sobre los rangos: no supone",
             "linealidad ni que la escala sea de intervalo."
           ),
-          cramer_v = "Las columnas se tratan como categorias sin orden.",
-          "La columna numerica se trata como cuantitativa y la otra como categoria."
+          cramer_v = "Las columnas se tratan como categor\u00edas sin orden.",
+          "La columna num\u00e9rica se trata como cuantitativa y la otra como categor\u00eda."
         ),
         asociacion = as.numeric(valor), n_pares = length(x),
         stringsAsFactors = FALSE
       )
     }
   }
-  vacia <- data.frame(
+  vacia <- .data_frame_simple(
     columna_1 = character(), columna_2 = character(), tipo_1 = character(),
     tipo_2 = character(), metodo = character(), supuesto = character(),
     asociacion = numeric(), n_pares = integer(), stringsAsFactors = FALSE
@@ -817,9 +881,13 @@ detectar_asociaciones <- function(datos, dependencias = NULL, umbral = 0.3,
       motivo = omitidos$motivo,
       como_resolverlo = paste(
         "Completar al menos 3 filas para el par y revisar que la medida sea",
-        "finita antes de interpretar que no hay asociacion."
+        "finita antes de interpretar que no hay asociaci\u00f3n."
       ),
-      dependencia = NA_character_, stringsAsFactors = FALSE
+      dependencia = NA_character_,
+      columnas = I(lapply(seq_len(nrow(omitidos)), function(i) {
+        as.character(omitidos[i, c("columna_1", "columna_2")])
+      })),
+      stringsAsFactors = FALSE
     )
   } else {
     .cobertura_diagnosticos_vacia()
@@ -1074,7 +1142,7 @@ analizar_tiempo <- function(datos, perfil = NULL, columnas = NULL,
       for (grupo in utils::head(grupos, max_huecos)) {
         h <- h + 1L
         fechas_grupo <- esperadas[grupo]
-        huecos[[h]] <- data.frame(
+        huecos[[h]] <- .data_frame_simple(
           columna = nombre, desde = min(fechas_grupo), hasta = max(fechas_grupo),
           n_esperados_ausentes = length(fechas_grupo),
           duracion_dias = as.numeric(max(fechas_grupo) - min(fechas_grupo)) + 1,
@@ -1112,13 +1180,13 @@ analizar_tiempo <- function(datos, perfil = NULL, columnas = NULL,
       n_grupos_huecos = length(grupos), huecos_truncados = truncado,
       stringsAsFactors = FALSE
     )
-    propuestas[[i]] <- data.frame(
+    propuestas[[i]] <- .data_frame_simple(
       columna = nombre, frecuencia_dias = frecuencia, confianza = confianza,
       contiguidad = contiguidad, cobertura_periodo = cobertura,
       calendario = paste(calendario, collapse = ","), confirmada = FALSE,
       evidencia = if (is.finite(frecuencia)) paste0(
         "Moda de intervalos: ", .formatear_numero_publicado(frecuencia),
-        " dias; ", length(positivas),
+        if (frecuencia == 1) " d\u00eda; " else " d\u00edas; ", length(positivas),
         " intervalos observados."
       ) else "No hay intervalos suficientes para proponer frecuencia.",
       stringsAsFactors = FALSE
@@ -1144,7 +1212,7 @@ analizar_tiempo <- function(datos, perfil = NULL, columnas = NULL,
     n_esperados_ausentes = integer(), duracion_dias = numeric(),
     frecuencia_dias = numeric(), calendario = character(), stringsAsFactors = FALSE
   )
-  vacio_prop <- data.frame(
+  vacio_prop <- .data_frame_simple(
     columna = character(), frecuencia_dias = numeric(), confianza = numeric(),
     contiguidad = numeric(), cobertura_periodo = numeric(),
     calendario = character(), confirmada = logical(), evidencia = character(),

@@ -1,20 +1,20 @@
 test_that("las ramas de normalizacion declaran perfiles y casos limite", {
   expect_error(
     normalizacion(puntuacion = c(TRUE, FALSE)),
-    "logicos escalares"
+    "l\u00f3gicos escalares"
   )
-  expect_error(normalizacion(proteger = NA_character_), "no vacio")
+  expect_error(normalizacion(proteger = NA_character_), "no vac\u00edo")
   expect_error(normalizacion(proteger = intToUtf8(769L)), "grafema")
-  expect_output(print(normalizacion()), "Perfil de normalizacion")
+  expect_output(print(normalizacion()), "Perfil de normalizaci")
   expect_error(lupa:::.normalizacion_preset("estrecho"), "debe ser amplio")
   expect_error(lupa:::.resolver_normalizacion(c(TRUE, FALSE)), "vector de")
   expect_error(
     lupa:::.resolver_normalizacion(list(a = normalizacion(), a = normalizacion())),
-    "nombres de columnas unicos"
+    "nombres de columnas \u00fanicos"
   )
   expect_error(
     lupa:::.resolver_normalizacion(list(a = 1L)),
-    "perfil valido"
+    "perfil v\u00e1lido"
   )
   expect_error(lupa:::.resolver_normalizacion(1), "TRUE, FALSE")
 
@@ -87,8 +87,8 @@ test_that("las ramas de conversion y referenciales declaran su alcance", {
   )
   config <- lupa:::.validar_config_referencial(list())
   expect_error(lupa:::.validar_config_referencial(list(extra = TRUE)), "no aceptan")
-  expect_error(lupa:::.validar_config_referencial(list(normalizar = 1)), "perfil valido")
-  expect_error(lupa:::.validar_config_referencial(list(proximidad = NA)), "logico")
+    expect_error(lupa:::.validar_config_referencial(list(normalizar = 1)), "perfil v\u00e1lido")
+  expect_error(lupa:::.validar_config_referencial(list(proximidad = NA)), "l\u00f3gico")
   expect_error(lupa:::.validar_config_referencial(list(metodo = "x")), "medida")
   expect_error(lupa:::.validar_config_referencial(list(p = 1)), "0.25")
   expect_error(lupa:::.validar_config_referencial(list(umbral = -1)), "no negativo")
@@ -112,7 +112,7 @@ test_that("las ramas de conversion y referenciales declaran su alcance", {
     modifyList(config, list(max_pares = 1L))
   )
   expect_true(limite$alcance$truncado)
-  expect_match(limite$alcance$motivo, "limite de pares")
+  expect_match(limite$alcance$motivo, "l\u00edmite de pares")
   una <- lupa:::.referencial_proximidad(
     1L, "x", "a", data.frame(x = "a"), config
   )
@@ -173,7 +173,8 @@ test_that("los decodificadores declaran entradas imposibles y no reparables", {
   expect_identical(lupa:::.ftfy_decode_inconsistent_utf8("texto sano"), "texto sano")
   expect_null(lupa:::.ftfy_fallback_latin1_windows1252("texto sano"))
   expect_equal(lupa:::.ftfy_reparar_uno(character()), list(
-    texto = NA_character_, pasos = character(), estado = "sin_texto"
+    texto = NA_character_, pasos = character(), estado = "sin_texto",
+    consumidas = logical()
   ))
   expect_equal(lupa:::.ftfy_reparar_uno("texto sano")$estado, "no_parece_roto")
   expect_equal(lupa:::.ftfy_estado_agregado(character()), "no_parece_roto")

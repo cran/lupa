@@ -25,18 +25,73 @@
   names(datos)[indices]
 }
 
+# La identidad de filas de varias columnas: un codigo por fila, el mismo para
+# filas iguales en todas las columnas. Se armaba con `interaction()`, que en R
+# anterior a 4.6 calcula el producto de los niveles en entero: pasado 2^31
+# desborda, los codigos quedan `NA` y los `NA` se agrupan entre si. Con dos
+# columnas de 60.000 y 58.000 valores distintos, `aplicar()` con
+# `conservar_primera_duplicada` borraba 23.673 filas legitimas de 60.100.
+#
+# Aca se combina de a una columna: el par (grupo hasta aca, codigo de la
+# columna) se ordena y se renumera, asi que el grupo nunca pasa del numero de
+# filas y no hay producto que desborde. El orden de los codigos es el de
+# `interaction(..., lex.order = TRUE)` -la primera columna manda, y dentro de
+# cada una el orden de sus codigos-: quien parte con `split()` recibe los grupos
+# en el mismo orden que antes. Un codigo `NA` deja la fila sin codigo, como en
+# `interaction()`: quien quiere el `NA` como un valor mas lo pasa como nivel
+# (`.factor_por_bytes(x, exclude = NULL)`, que es lo que hace `.codigos_filas()`).
+.codigos_filas_combinados <- function(codigos) {
+  if (!length(codigos)) return(integer())
+  n <- length(codigos[[1L]])
+  if (!n) return(integer())
+  grupos <- rep.int(1L, n)
+  sin_codigo <- rep(FALSE, n)
+  for (columna in codigos) {
+    if (length(columna) != n) {
+      .detener(
+        "Las columnas de la identidad de filas deben tener el mismo largo.",
+        call. = FALSE
+      )
+    }
+    codigo <- if (is.factor(columna)) {
+      as.integer(columna)
+    } else if (is.integer(columna)) {
+      columna
+    } else if (is.character(columna)) {
+      as.integer(.factor_por_bytes(columna, exclude = NULL))
+    } else {
+      match(columna, .sort_por_bytes(unique(columna), na.last = TRUE))
+    }
+    if (anyNA(codigo)) {
+      sin_codigo <- sin_codigo | is.na(codigo)
+      codigo[is.na(codigo)] <- 0L
+    }
+    orden <- .orden_por_bytes(grupos, codigo)
+    nuevo <- c(TRUE, grupos[orden][-1L] != grupos[orden][-n] |
+                       codigo[orden][-1L] != codigo[orden][-n])
+    grupos[orden] <- cumsum(nuevo)
+  }
+  if (any(sin_codigo)) {
+    grupos[sin_codigo] <- NA_integer_
+    presentes <- grupos[!sin_codigo]
+    grupos[!sin_codigo] <- match(presentes, .sort_por_bytes(unique(presentes)))
+  }
+  grupos
+}
+
 .codigos_filas <- function(datos) {
   if (!nrow(datos)) return(integer())
   if (!ncol(datos)) return(rep.int(1L, nrow(datos)))
+  # Una matriz o una tabla anidada como columna aporta varias columnas, no un
+  # vector del largo de la tabla: se aplana por la regla del perfil y del plan.
+  datos <- .expandir_datos_identidad(datos)
   factores <- lapply(datos, function(x) {
     # Los niveles de `factor()` salen de `as.character()`, que funde dos dobles
     # distintos -`0.1 + 0.2` y `0.3`- y separa el mismo numero escrito como
     # entero y como doble -`100000L` y `1e5`-. Ver `.texto_identidad()`.
     .factor_por_bytes(.texto_identidad(.valores_relacion(x)), exclude = NULL)
   })
-  as.integer(do.call(
-    interaction, c(factores, list(drop = TRUE, lex.order = TRUE))
-  ))
+  .codigos_filas_combinados(factores)
 }
 
 .filas_en_referencial <- function(objetivo, referencia) {
@@ -63,20 +118,20 @@
                   "max_pares", "nucleos")
   desconocidas <- setdiff(names(configuracion), permitidas)
   if (length(desconocidas)) {
-    .detener("Las metricas referenciales no aceptan: ",
+    .detener("Las m\u00e9tricas referenciales no aceptan: ",
          paste(desconocidas, collapse = ", "), ".", call. = FALSE)
   }
   normalizar <- configuracion[["normalizar"]]
   if (!is.null(normalizar)) {
     tryCatch(.resolver_normalizacion(normalizar), error = function(e) {
-      .detener("`normalizar` no describe un perfil valido: ",
+      .detener("`normalizar` no describe un perfil v\u00e1lido: ",
            conditionMessage(e), call. = FALSE)
     })
   }
   proximidad <- configuracion[["proximidad"]]
   if (is.null(proximidad)) proximidad <- TRUE
   if (!is.logical(proximidad) || length(proximidad) != 1L || is.na(proximidad)) {
-    .detener("`proximidad` debe ser un logico escalar sin NA.", call. = FALSE)
+    .detener("`proximidad` debe ser un l\u00f3gico escalar sin NA.", call. = FALSE)
   }
   metodo <- configuracion[["metodo"]]
   if (is.null(metodo)) metodo <- "jw"
@@ -91,13 +146,13 @@
   if (is.null(p)) p <- 0.1
   if (!is.numeric(p) || length(p) != 1L || is.na(p) || !is.finite(p) ||
       p < 0 || p > 0.25) {
-    .detener("`p` debe ser un numero finito entre 0 y 0.25.", call. = FALSE)
+    .detener("`p` debe ser un n\u00famero finito entre 0 y 0.25.", call. = FALSE)
   }
   umbral <- configuracion[["umbral"]]
   if (is.null(umbral)) umbral <- 0.10
   if (!is.numeric(umbral) || length(umbral) != 1L || is.na(umbral) ||
       !is.finite(umbral) || umbral < 0) {
-    .detener("`umbral` debe ser un numero finito no negativo.", call. = FALSE)
+    .detener("`umbral` debe ser un n\u00famero finito no negativo.", call. = FALSE)
   }
   max_pares <- configuracion[["max_pares"]]
   if (is.null(max_pares)) max_pares <- 500000L
@@ -205,8 +260,10 @@
                           length(texto_referencia)) {
     paste0(
       "No se compararon por proximidad ", sum(es_ilegible),
-      " valores fallidos y ", length(texto_referencia) - length(candidatos),
-      " filas del referencial con bytes que no son texto UTF-8: la ",
+      if (sum(es_ilegible) == 1L) " valor fallido y " else " valores fallidos y ",
+      length(texto_referencia) - length(candidatos),
+      if (length(texto_referencia) - length(candidatos) == 1L) " fila del referencial con bytes que no son texto UTF-8: la " else
+        " filas del referencial con bytes que no son texto UTF-8: la ",
       "pertenencia los compara por sus bytes, pero una distancia de texto no ",
       "se puede medir sobre ellos."
     )
@@ -214,7 +271,7 @@
   evidencia <- rep("", n)
   base <- list(
     solicitada = isTRUE(config$proximidad), disponible = FALSE,
-    motivo = "No se calculo la proximidad.", n_fallos = length(filas_fallidas),
+    motivo = "No se calcul\u00f3 la proximidad.", n_fallos = length(filas_fallidas),
     n_valores_fallidos_distintos = n_valores,
     n_valores_fallidos_comparados = 0L,
     n_fallos_comparados = 0L, n_referencial = length(texto_referencia),
@@ -223,18 +280,18 @@
     max_pares = config$max_pares, truncado = FALSE
   )
   if (!isTRUE(config$proximidad)) {
-    base$motivo <- "La proximidad fue desactivada por configuracion."
+    base$motivo <- "La proximidad fue desactivada por configuraci\u00f3n."
     return(list(evidencia = evidencia, alcance = base))
   }
   if (!.stringdist_disponible()) {
-    base$motivo <- "No esta instalado el paquete opcional 'stringdist'."
+    base$motivo <- "No est\u00e1 instalado el paquete opcional 'stringdist'."
     base$n_pares_sin_comparar <- as.numeric(n_valores) *
       length(texto_referencia)
     return(list(evidencia = evidencia, alcance = base))
   }
   if (!length(filas_fallidas) || !length(texto_referencia)) {
     base$disponible <- TRUE
-    base$motivo <- "No hubo fallos o el referencial esta vacio."
+    base$motivo <- "No hubo fallos o el referencial est\u00e1 vac\u00edo."
     return(list(evidencia = evidencia, alcance = base))
   }
   nref <- length(texto_referencia)
@@ -249,7 +306,7 @@
     n_legibles
   } else min(n_legibles, floor(config$max_pares / nref_legible))
   if (ncomparar < 1L) {
-    base$motivo <- "El limite de pares no alcanza para comparar un fallo con el referencial."
+    base$motivo <- "El l\u00edmite de pares no alcanza para comparar un fallo con el referencial."
     base$n_pares_sin_comparar <- as.numeric(n_valores) * nref
     base$truncado <- TRUE
     return(list(evidencia = evidencia, alcance = base))
@@ -436,7 +493,7 @@ referencial <- function(datos, clave, valor = character(), completo = FALSE,
   normalizar <- tryCatch(
     .resolver_normalizacion(normalizar),
     error = function(e) {
-      .detener("`normalizar` no describe un perfil valido: ",
+      .detener("`normalizar` no describe un perfil v\u00e1lido: ",
            conditionMessage(e), call. = FALSE)
     }
   )

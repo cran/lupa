@@ -4,6 +4,29 @@
 # NOT_CRAN=true; en CRAN se saltea para que el check entre en sus tiempos.
 testthat::skip_on_cran()
 
+.o101_perfil_aviso_opcional <- function(argumentos, espera_aviso = FALSE) {
+  ejecutar <- function() suppressMessages(do.call(perfilar_dbi, argumentos))
+  if (isTRUE(espera_aviso)) {
+    # Que haya aviso depende del controlador, no de lupa: con duckdb 1.x,
+    # STDDEV_SAMP sobre un NaN es un error del motor ("out of range") y la
+    # consulta queda como no disponible; desde duckdb 2.0 devuelve NaN y no
+    # falla ninguna. Lo que se fija es la relacion: hay aviso si y solo si hay
+    # fallas registradas, y el aviso es el de la muestra del motor.
+    avisos <- list()
+    perfil <- withCallingHandlers(ejecutar(), warning = function(w) {
+      avisos[[length(avisos) + 1L]] <<- w
+      invokeRestart("muffleWarning")
+    })
+    for (w in avisos) expect_s3_class(w, "lupa_aviso_muestra_motor")
+    fallas <- perfil$resumen_tabla$meta$consultas$fallas
+    n_fallas <- if (is.data.frame(fallas)) nrow(fallas) else 0L
+    expect_identical(length(avisos) > 0L, n_fallas > 0L)
+  } else {
+    perfil <- expect_no_warning(ejecutar())
+  }
+  perfil
+}
+
 test_that("el alcance de un agregado de segundo nivel es el de cada entidad", {
   nucleo <- metricas_nucleo()
   formato <- function(entidad, atributo) {
@@ -48,7 +71,9 @@ test_that("un NaN del motor no se publica como una cifra calculada", {
     argumentos <- list(con, "d", bloque_muestra = "solo_agregados",
                        proteger_datos_personales = FALSE)
     if (!is.null(metricas)) argumentos$metricas <- metricas
-    perfil <- suppressMessages(do.call(perfilar_dbi, argumentos))
+    perfil <- .o101_perfil_aviso_opcional(
+      argumentos, espera_aviso = is.null(metricas)
+    )
     sql <- as.data.frame(perfil$resumen_tabla$sql)
     de_nan <- sql[sql$columna == "n_nan" &
                     sql$metrica %in% c("minimo", "maximo", "media", "mediana",
@@ -70,10 +95,10 @@ test_that("la sonda de magnitud ve un texto colado en una columna numerica", {
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   DBI::dbExecute(con, "CREATE TABLE t (v INTEGER)")
   DBI::dbExecute(con, "INSERT INTO t VALUES (1), (2), (3), (4), ('texto')")
-  perfil <- suppressMessages(perfilar_dbi(
+  perfil <- expect_no_warning(suppressMessages(perfilar_dbi(
     con, "t", metricas = c("validos", "mediana"),
     bloque_muestra = "solo_agregados", proteger_datos_personales = FALSE
-  ))
+  )))
   sql <- as.data.frame(perfil$resumen_tabla$sql)
   # Con `MIN` la sonda devolvia 1 y la mediana se publicaba calculada sobre una
   # columna con texto.

@@ -104,7 +104,8 @@
       evaluados[[indice]] >= total) {
     return("")
   }
-  paste0(" sobre ", evaluados[[indice]], " de ", total, " valores")
+  paste0(" sobre ", evaluados[[indice]], " de ", total,
+         if (total == 1L) " valor" else " valores")
 }
 
 .proporcion_validadores <- function(textos, validadores, umbral,
@@ -1100,7 +1101,7 @@
     ))
   } else NA_real_
   textos_presentes <- textos[presentes]
-  longitudes_crudas <- nchar(textos_presentes, type = "chars")
+  longitudes_crudas <- .nchar_texto_seguro(textos_presentes)
   composicion_documental <- if (length(textos_presentes)) {
     mean(grepl("^[0-9 .-]+$", textos_presentes, perl = TRUE)) >= 0.8
   } else FALSE
@@ -1108,7 +1109,9 @@
     mean(longitudes_crudas >= 7L & longitudes_crudas <= 20L) >= 0.8 &&
     composicion_documental
   longitudes <- if (cerca_de_forma_documento) {
-    nchar(gsub("[^0-9]", "", textos_presentes, perl = TRUE), type = "chars")
+    .nchar_texto_seguro(gsub(
+      "[^0-9]", "", textos_presentes, perl = TRUE
+    ))
   } else integer()
   parece_fecha <- inferencia$tipo %in% c("fecha", "fecha-hora")
   forma_documento_posible <- length(longitudes) &&
@@ -1383,7 +1386,7 @@
       muestra_validadores = muestra_validadores
     )
     if (is.na(clasificacion$tipo)) return(NULL)
-    data.frame(
+    .data_frame_simple(
       columna = nombres[[i]],
       tipo = clasificacion$tipo,
       proporcion_compatible = as.numeric(clasificacion$proporcion),
@@ -1591,7 +1594,7 @@
 }
 
 .copias_vacias <- function() {
-  data.frame(columna = character(), proporcion = numeric(),
+  .data_frame_simple(columna = character(), proporcion = numeric(),
              evaluados = integer(), de = character(), origen = character(),
              stringsAsFactors = FALSE)
 }
@@ -1742,10 +1745,10 @@
         "Tipo posible: ", fila$tipo[[1L]], "; fundamento: ",
         fila$fundamento[[1L]],
         "; poder discriminante: ", fila$poder_discriminante[[1L]],
-        "; proteccion automatica: ", if (fila$proteger[[1L]]) "si" else "no",
+        "; protecci\u00f3n autom\u00e1tica: ", if (fila$proteger[[1L]]) "s\u00ed" else "no",
         if (identical(fila$poder_discriminante[[1L]], "debil") &&
             isTRUE(fila$proteger[[1L]])) {
-          " (por precaucion: la forma es compatible y no se pudo verificar)"
+          " (por precauci\u00f3n: la forma es compatible y no se pudo verificar)"
         } else "",
         if (is.finite(fila$proporcion_compatible[[1L]])) {
           paste0("; proporci\u00f3n compatible: ",
@@ -1758,11 +1761,11 @@
         if (fila$proteger[[1L]]) {
           paste0(
             "Mantener protegidos la moda, los ejemplos, la evidencia y los ",
-            "estadisticos de orden al compartir salidas."
+            "estad\u00edsticos de orden al compartir salidas."
           )
         } else {
           paste0(
-        "Confirmar la semantica de la columna si se necesita decidir si ",
+        "Confirmar la sem\u00e1ntica de la columna si se necesita decidir si ",
             "sus valores deben protegerse."
           )
         }
@@ -1867,8 +1870,51 @@
   )
 }
 
+# Cuantas fechas de la columna caen fuera de los limites, leidas como las leyo el
+# resumen que dispara el hallazgo: `.valores_cuantitativos()` sobre la columna
+# preparada como la prepara `.perfilar_columna()` -`.texto_analizable()` y el
+# universo aplicable-, con la inferencia, los formatos y los meses escritos de su
+# resultado. El hallazgo publicaba `n_afectados = NA` con los datos a la vista:
+# el `NA` dice "no se puede saber", y se podia. Sin la columna o su resultado no
+# se puede, y sigue `NA`; tambien si la cuenta no ve ninguna fecha afuera, que
+# contradiria al minimo o al maximo que disparo el hallazgo.
+.filas_fechas_fuera_de_rango_personal <- function(x, resultado, limite_inferior,
+                                                  limite_superior) {
+  if (is.null(x) || !is.list(resultado) || is.null(resultado$inferencia)) {
+    return(NULL)
+  }
+  valores <- .texto_analizable(x)$valores
+  aplicable <- resultado$aplicable
+  if (length(aplicable) == length(valores) && !all(aplicable)) {
+    valores[!aplicable] <- NA
+  }
+  meses <- attr(resultado$inferencia$formatos_fecha, "meses_texto", exact = TRUE)
+  cuantitativos <- tryCatch(
+    .valores_cuantitativos(
+      valores, resultado$inferencia, resultado$formatos, meses_texto = meses
+    ),
+    error = function(e) NULL
+  )
+  if (is.null(cuantitativos) ||
+      !isTRUE(cuantitativos$clase %in% c("fecha", "fecha-hora"))) {
+    return(NULL)
+  }
+  segundos <- as.numeric(cuantitativos$valores)
+  # Sin un valor por fila no hay posiciones que dar, y contar sin poder nombrar
+  # las filas es la incoherencia que la guarda de trazabilidad acusa.
+  if (length(segundos) != length(valores)) return(NULL)
+  # El dia civil en UTC, que es el de `minimo_fecha` y `maximo_fecha`.
+  dias <- floor(segundos / 86400)
+  which(is.finite(segundos) & (dias < as.numeric(limite_inferior) |
+                                 dias > as.numeric(limite_superior)))
+}
+
+# `datos` y `resultados` -la tabla y los resultados por columna de
+# `.perfilar_columna()`, en el orden de `columnas`- son opcionales: con ellos el
+# hallazgo cuenta las filas afectadas; sin ellos publica `NA`.
 .hallazgos_rango_fecha_personal <- function(columnas, clasificacion,
-                                            fecha_referencia, tipo) {
+                                            fecha_referencia, tipo,
+                                            datos = NULL, resultados = NULL) {
   configuraciones <- list(
     fecha_nacimiento = list(
       hallazgo = "fecha_nacimiento_fuera_rango",
@@ -1899,7 +1945,18 @@
       if (anterior) "al menos una fecha anterior a 1900",
       if (futura) "al menos una fecha posterior a la fecha del perfil"
     )
-    hallazgos[[length(hallazgos) + 1L]] <- .nuevo_hallazgo(
+    # La cuenta y la traza salen de las mismas filas: el hallazgo contaba y
+    # no nombraba ninguna, y la guarda de trazabilidad avisaba de un problema
+    # del paquete en cada columna de nacimiento con una fecha fuera de rango.
+    filas <- if (is.data.frame(datos) && is.list(resultados) &&
+                   indice <= ncol(datos) && indice <= length(resultados)) {
+      .filas_fechas_fuera_de_rango_personal(
+        datos[[indice]], resultados[[indice]], limite_inferior,
+        limite_superior
+      )
+    }
+    n_afectados <- if (length(filas)) as.numeric(length(filas)) else NA_real_
+    hallazgo <- .nuevo_hallazgo(
       nombre, configuracion$hallazgo,
       if (futura) "error" else "sospechoso",
       paste0(
@@ -1908,12 +1965,18 @@
         paste(situaciones, collapse = " y "), "."
       ),
       paste0(
-        "Se aplicaron limites de plausibilidad sin publicar las fechas ",
+        "Se aplicaron l\u00edmites de plausibilidad sin publicar las fechas ",
         "observadas."
       ),
       "Revisar los registros se\u00f1alados contra la fuente antes de corregirlos.",
-      columnas$n[[indice]], NA_real_, "fila"
+      columnas$n[[indice]], n_afectados, "fila"
     )
+    if (length(filas)) {
+      hallazgo$trazabilidad <- I(list(
+        .trazabilidad_indices(filas, "completo", limite = Inf)
+      ))
+    }
+    hallazgos[[length(hallazgos) + 1L]] <- hallazgo
   }
   hallazgos
 }
@@ -2462,7 +2525,7 @@
   ))
   # El piso se cuenta en CARACTERES, como en `.valores_identificantes()`: en bytes,
   # un nombre cirilico de cuatro letras pasaba el piso de seis.
-  largos <- nchar(agujas, type = "chars", allowNA = TRUE)
+  largos <- .nchar_texto_seguro(agujas)
   agujas <- agujas[
     !is.na(agujas) & (is.na(largos) | largos >= .MIN_LARGO_VALOR_IDENTIFICANTE)
   ]
@@ -3318,9 +3381,22 @@
   # que cortar por bytes da las mismas piezas; se les devuelve la marca del texto,
   # que el corte por bytes no conserva.
   compuestos <- vapply(restantes, function(v) {
+    # Sin una coma, `.separar_nombres_columnas()` no puede dar dos piezas: une
+    # nombres con `,` o `, `, y si no los encuentra parte por la coma. Se
+    # contesta sin llamarla, que es lo caro de este barrido: medido con la
+    # proteccion pedida sobre la tabla de ejemplo, 2441 de sus 2693 llamadas
+    # eran sobre un valor sin coma y todas devolvian una pieza.
+    con_coma <- grepl(",", v, fixed = TRUE, useBytes = TRUE)
+    piezas_coma <- if (con_coma) {
+      .separar_nombres_columnas(v, nombres, sep = ",")
+    } else character()
+    if (length(piezas_coma) > 1L &&
+        all(.nombres_para_operar(piezas_coma) %in% claves)) {
+      return(TRUE)
+    }
     # Sin ningun separador queda una sola pieza y no es una referencia a varios:
     # se contesta sin partir. Los separadores son ASCII y se buscan por bytes.
-    if (!grepl(",", v, fixed = TRUE, useBytes = TRUE) &&
+    if (!con_coma &&
         !grepl("+", v, fixed = TRUE, useBytes = TRUE) &&
         !grepl("|", v, fixed = TRUE, useBytes = TRUE) &&
         !grepl("->", v, fixed = TRUE, useBytes = TRUE)) {
@@ -4438,16 +4514,16 @@
       "[evidencia protegida]"
     } else paste0(
       inicio,
-      ". La columna corresponde segun ", tipo_criterio,
+      ". La columna corresponde seg\u00fan ", tipo_criterio,
       " de `", determinante,
-      "` que no se publica porque esa columna esta protegida."
+      "` que no se publica porque esa columna est\u00e1 protegida."
     )
     columna <- as.character(hallazgos$columna[[i]])
     hallazgos$sugerencia[[i]] <- paste0(
-      "Si es asi, declararlo y volver a perfilar con `aplicabilidad` usando en `",
+      "Si es as\u00ed, declararlo y volver a perfilar con `aplicabilidad` usando en `",
       determinante,
-      "` el criterio confirmado en la fuente. El criterio no se reproduce aqui",
-      " porque esa columna esta protegida. Con la regla declarada, la ausencia",
+      "` el criterio confirmado en la fuente. El criterio no se reproduce aqu\u00ed",
+      " porque esa columna est\u00e1 protegida. Con la regla declarada, la ausencia",
       " fuera de ese universo deja de contarse como defecto y el alcance queda",
       " escrito en `cobertura_diagnosticos` para `", columna, "`."
     )
@@ -4708,7 +4784,7 @@
     )
     hallazgos$descripcion[con_valor] <- paste(
       hallazgos$descripcion[con_valor],
-      "El valor no se nombra porque la columna esta protegida."
+      "El valor no se nombra porque la columna est\u00e1 protegida."
     )
   }
   # La clave declarada es, por definicion, lo que identifica una fila: es la
@@ -4896,7 +4972,7 @@
   # sobre un vector con marcas mezcladas avisaba "unable to translate" o
   # abortaba: el filtro del catalogo de ausencias de abajo caia en su `tryCatch`
   # y no se aplicaba. La proteccion decidia distinto segun el locale.
-  largos <- nchar(.declarar_utf8_valido(valores), type = "chars", allowNA = TRUE)
+  largos <- .nchar_texto_seguro(valores)
   valores <- valores[is.na(largos) | largos >= .MIN_LARGO_VALOR_IDENTIFICANTE]
   # Un relleno sin una letra ni un digito -"------", "......"- no es el dato de
   # nadie y no puede identificar a nadie. Medido: el "------" de

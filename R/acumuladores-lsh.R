@@ -359,7 +359,7 @@
     return(character())
   }
   texto <- as.character(texto)
-  largo <- nchar(texto, type = "chars")
+  largo <- .nchar_texto_seguro(texto)[[1L]]
   total <- if (largo < q) 1L else largo - q + 1L
   inicios <- seq.int(1L, total, by = tamano)
   vapply(inicios, function(inicio) {
@@ -1184,7 +1184,7 @@
         unidos$max_cache %||% 0
       )
       if (unidos$faltantes > 0L) .detener(
-        "merge-join del diccionario dejo q-gramas sin identificador.",
+        "merge-join del diccionario dej\u00f3 q-gramas sin identificador.",
         call. = FALSE
       )
       firmas <- .lsh_firmas_desde_ids(

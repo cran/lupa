@@ -237,7 +237,7 @@ test_that("H4: perfilar_dbi() con scipen negativo no publica divergencias entre 
 })
 
 test_that("H4: un centinela doble excluye su valor en una columna integer64 con cualquier scipen", {
-  skip_if_not_installed("bit64", "4.6.0")
+  skip_if_not_installed("bit64")
   x <- bit64::as.integer64(c(1, 2, 99999, 99999, 100000))
   for (sc in c(0, -9)) {
     anterior <- options(scipen = sc)
@@ -394,7 +394,7 @@ test_that("H7: con scipen negativo las cifras publicadas como texto no salen en 
   # analizar_tiempo(): diez dias seguidos, nueve intervalos de un dia.
   tiempo <- analizar_tiempo(data.frame(d = as.Date("2026-01-01") + 0:9))
   expect_identical(tiempo$propuestas$evidencia,
-                   "Moda de intervalos: 1 dias; 9 intervalos observados.")
+                   "Moda de intervalos: 1 d\u00eda; 9 intervalos observados.")
   # El reporte: 8448 bytes son 8.25 Kb, que la consola redondea a 8.2.
   expect_identical(lupa:::.memoria_publicada_reporte(8448), "8448 bytes (8.2 Kb)")
   muestra <- list(estado = "disponible", indices_fila = 1:12, mostrados = 12L,
@@ -437,7 +437,7 @@ test_that("H7: con coma decimal los extremos de un rango disjunto se separan con
 test_that("H8: perfilar_dbi() no deja escapar el aviso crudo de bit64 y declara la perdida", {
   skip_if_not_installed("DBI")
   skip_if_not_installed("RSQLite")
-  skip_if_not_installed("bit64", "4.6.0")
+  skip_if_not_installed("bit64")
   grande <- bit64::as.integer64("9007199254740993")
   avisos <- character()
   perdida <- withCallingHandlers(

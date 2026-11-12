@@ -17,7 +17,7 @@
       anyNA(metadatos$columna) || length(indices_columnas) !=
       length(metadatos$columna) || anyNA(indices_columnas) ||
       anyDuplicated(indices_columnas)) {
-    .detener("`metadatos` debe tener una fila unica por columna existente.",
+    .detener("`metadatos` debe tener una fila \u00fanica por columna existente.",
          call. = FALSE)
   }
   permitidas <- c("columna", "escala", "rol", "confianza", "confirmada",
@@ -31,7 +31,7 @@
   }
   if ("confirmada" %in% names(metadatos) &&
       (!is.logical(metadatos$confirmada) || anyNA(metadatos$confirmada))) {
-    .detener("`confirmada` debe ser logica y no contener NA.", call. = FALSE)
+    .detener("`confirmada` debe ser l\u00f3gica y no contener NA.", call. = FALSE)
   }
   if ("confianza" %in% names(metadatos) &&
       any(!is.na(metadatos$confianza) &
@@ -81,7 +81,7 @@
   ))
   if (inherits(x, c("Date", "POSIXt"))) return(list(
     escala = "temporal", rol = "fecha", confianza = 1, confirmada = TRUE,
-    evidencia = "La clase de fecha declara semantica temporal."
+    evidencia = "La clase de fecha declara sem\u00e1ntica temporal."
   ))
   # Una unidad declara una MAGNITUD, no si es discreta o continua: `kg` y
   # `personas` son las dos unidades. Lo que decide entre las dos es el valor, y
@@ -115,14 +115,14 @@
         } else {
           "sin valores finitos no se ve si es una cuenta o una medida: "
         },
-        "que sea discreta o continua no esta declarado."
+        "que sea discreta o continua no est\u00e1 declarado."
       )
     ))
   }
   if (!is.null(attr(x, "labels", exact = TRUE))) return(list(
     escala = "nominal", rol = "categoria", confianza = 0.85,
     confirmada = FALSE,
-    evidencia = "Las etiquetas sugieren categorias, pero no declaran orden."
+    evidencia = "Las etiquetas sugieren categor\u00edas, pero no declaran orden."
   ))
   presentes <- tryCatch(x[!is.na(x)], error = function(e) NULL)
   distintos <- if (is.null(presentes)) {
@@ -141,7 +141,7 @@
     confirmada = FALSE,
     evidencia = paste0(
       "El tipo de la columna no permite comparar sus valores para inferir una ",
-      "escala de medicion."
+      "escala de medici\u00f3n."
     )
   ))
   # Una columna sin un solo valor observado no exhibe ninguna escala. Antes se
@@ -154,8 +154,8 @@
     escala = "desconocida", rol = "desconocido", confianza = NA_real_,
     confirmada = FALSE,
     evidencia = paste0(
-      "La columna no tiene ningun valor observado: no hay con que inferir una ",
-      "escala de medicion."
+      "La columna no tiene ning\u00fan valor observado: no hay con que inferir una ",
+      "escala de medici\u00f3n."
     )
   ))
   # `Inf == floor(Inf)` es TRUE por la aritmetica de los dobles, no porque `Inf`
@@ -167,14 +167,14 @@
     escala = "desconocida", rol = "desconocido", confianza = NA_real_,
     confirmada = FALSE,
     evidencia = paste0(
-      "La columna no tiene ningun valor finito -solo `Inf` o `-Inf`-: no hay ",
-      "con que inferir una escala de medicion."
+    "La columna no tiene ning\u00fan valor finito -s\u00f3lo `Inf` o `-Inf`-: no hay ",
+      "con qu\u00e9 inferir una escala de medici\u00f3n."
     )
   ))
   if (tipo_implicito == "identificador") return(list(
     escala = "nominal", rol = "identificador", confianza = 0.9,
     confirmada = FALSE,
-    evidencia = "La forma y cardinalidad sugieren un identificador; requiere confirmacion."
+    evidencia = "La forma y cardinalidad sugieren un identificador; requiere confirmaci\u00f3n."
   ))
   if (tipo_implicito %in% c("fecha", "fecha-hora")) return(list(
     escala = "temporal", rol = "fecha", confianza = 0.85,
@@ -184,7 +184,7 @@
   if (tipo_implicito == "logico" || distintos == 2L) return(list(
     escala = "binaria", rol = "indicador", confianza = 0.8,
     confirmada = FALSE,
-    evidencia = "Se observaron dos estados; pueden ser codigos y requieren confirmacion."
+    evidencia = "Se observaron dos estados; pueden ser c\u00f3digos y requieren confirmaci\u00f3n."
   ))
   finitos <- if (is.double(x) && !inherits(x, "integer64")) {
     presentes[is.finite(presentes)]
@@ -193,21 +193,21 @@
       all(finitos == floor(finitos)))) return(list(
     escala = "discreta", rol = "medida", confianza = 0.65,
     confirmada = FALSE,
-    evidencia = "Los valores son enteros; tambien podrian ser codigos nominales."
+    evidencia = "Los valores son enteros; tambi\u00e9n podrian ser c\u00f3digos nominales."
   ))
   if (is.numeric(x)) return(list(
     escala = "continua", rol = "medida", confianza = 0.65,
     confirmada = FALSE,
-    evidencia = "El almacenamiento admite decimales; la semantica no esta declarada."
+    evidencia = "El almacenamiento admite decimales; la sem\u00e1ntica no est\u00e1 declarada."
   ))
   if (is.character(x)) return(list(
     escala = "nominal", rol = "categoria", confianza = 0.55,
     confirmada = FALSE,
-    evidencia = "El texto sugiere categorias, pero puede ser texto libre."
+    evidencia = "El texto sugiere categor\u00edas, pero puede ser texto libre."
   ))
   list(
     escala = "desconocida", rol = "desconocido", confianza = NA_real_,
-    confirmada = FALSE, evidencia = "El tipo no aporta una escala de medicion."
+    confirmada = FALSE, evidencia = "El tipo no aporta una escala de medici\u00f3n."
   )
 }
 
@@ -217,11 +217,11 @@
     escala,
     nominal = "ValoresPosiblesPorExtension; Formato",
     ordinal = "ValoresPosiblesPorExtension; orden y niveles",
-    discreta = "ValoresPosiblesPorComprension; distribucion",
+    discreta = "ValoresPosiblesPorComprension; distribuci\u00f3n",
     continua = "Distribucion; ErrorEstandar; Escala",
     binaria = "ValoresPosiblesPorExtension; NoNulo",
     temporal = "Formato; vigencia; oportunidad",
-    "Requiere declaracion"
+    "Requiere declaraci\u00f3n"
   )
 }
 
@@ -265,7 +265,9 @@
 #' @param max_niveles Máximo de niveles guardados en cada lista.
 #' @param muestra Máximo de valores usados para enumerar niveles no declarados;
 #'   los niveles ausentes de factores y metadatos se verifican sobre toda la
-#'   columna.
+#'   columna, y `n_niveles_observados` cuenta los valores distintos de la
+#'   columna entera, con o sin `perfil`. `niveles_muestreados` dice si la lista
+#'   de niveles salió de una muestra.
 #' @param proteger_datos_personales Si se ocultan niveles concretos de columnas
 #'   cuya clasificación activa protección automática. Véase [perfilar()]. Con
 #'   `perfil`, se respeta la clasificación de ese perfil; sin `perfil`, se
@@ -408,13 +410,19 @@ clasificar_variables <- function(datos, perfil = NULL, metadatos = NULL,
     # Una escala que no guarda niveles no los cuenta: publicaba 0 para una columna
     # `1, 2, 3`, que se lee como "ningun nivel observado". `NA` dice que la cifra
     # no aplica.
+    # Sin perfil, la cuenta es la de la columna entera y con la misma regla que
+    # el perfil (`.n_distintos_columna()`). Se contaba sobre la muestra con la
+    # que se enumeran los niveles: una columna de 200.000 valores distintos
+    # publicaba 100.000 sin perfil y 200.000 con el, dos cifras para un hecho.
+    # La lista de niveles sigue saliendo de la muestra, y `niveles_muestreados`
+    # habla de la lista.
     n_observados <- if (!guardar_niveles) {
       NA_integer_
     } else if (!is.null(perfil)) {
       perfil$columnas$n_distintos[[i]]
     } else if (is.factor(x)) {
       sum(tabulate(as.integer(x), nbins = length(levels(x))) > 0L)
-    } else length(unique(muestra_texto))
+    } else .n_distintos_columna(x)
     n_ausentes <- length(ausentes)
     truncado <- any(c(length(declarados), length(observados), length(ausentes)) >
                      max_niveles)
@@ -438,7 +446,7 @@ clasificar_variables <- function(datos, perfil = NULL, metadatos = NULL,
       # para una columna en `km/h` y hacia abortar la funcion entera con `m^2`.
       .unidad_declarada(x)
     }
-    filas[[i]] <- data.frame(
+    filas[[i]] <- .data_frame_simple(
       columna = nombre, tipo_almacenamiento = .tipo_declarado(x),
       tipo_implicito = tipo_implicito, escala_propuesta = propuesta$escala,
       rol = propuesta$rol, confianza = propuesta$confianza,

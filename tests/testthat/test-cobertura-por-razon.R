@@ -124,7 +124,7 @@ test_that("falta stringdist: la proximidad de vocabulario se declara", {
 })
 
 test_that("falta bit64: perfilar() se niega con integer64 en lugar de declararlo", {
-  skip_if_not_installed("bit64", "4.6.0")
+  skip_if_not_installed("bit64")
   datos <- data.frame(texto = letters[1:5], stringsAsFactors = FALSE)
   datos$grande <- bit64::as.integer64(seq_len(5L))
 
@@ -267,7 +267,7 @@ test_that("una columna numérica con clase declarada se declara dos veces", {
 })
 
 test_that("una columna integer64 declara la razón de Benford por su tipo", {
-  skip_if_not_installed("bit64", "4.6.0")
+  skip_if_not_installed("bit64")
   set.seed(215)
   datos <- data.frame(id = seq_len(120))
   datos$grande <- bit64::as.integer64(round(stats::runif(120, 1, 999999)))
@@ -341,7 +341,7 @@ test_that("el resumen cuantitativo declara por que quedo corto", {
       datos = data.frame(x = c(stats::rnorm(90), rep(-999, 10L)),
                          id = seq_len(100L)),
       args = list(sentinelas_numericos = -999),
-      clave = "dejo afuera"
+      clave = "afuera"
     ),
     dias_de_mes = list(
       datos = data.frame(f = c(rep("2024-01-15", 20L), rep("2024-02", 10L)),
@@ -440,7 +440,7 @@ test_that("los grupos bajo el piso de asimetría se declaran, no desaparecen", {
   # Pero queda declarado.
   fila <- .fila_cobertura(seis_cuatro, "proximidad_vocabulario")
   expect_equal(nrow(fila), 1L)
-  expect_true(grepl("asimetria de frecuencias", fila$motivo, fixed = TRUE))
+  expect_true(grepl("asimetr\u00eda de frecuencias", fila$motivo, fixed = TRUE))
   expect_true(grepl("min_asimetria_vocabulario", fila$como_resolverlo,
                     fixed = TRUE))
 

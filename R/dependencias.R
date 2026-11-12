@@ -15,9 +15,9 @@
   # Con el separador por omision -"."- el par (`a.b`, `c`) y el par (`a`,
   # `b.c`) eran el mismo, y una dependencia que no se cumple parecia cumplirse.
   # Es el mismo arreglo que el de las evaluaciones.
-  as.integer(interaction(
-    .factor_por_bytes(grupo), .factor_por_bytes(.nombres_para_operar(y), exclude = NULL),
-    drop = TRUE, lex.order = TRUE, sep = "\034"
+  .codigos_filas(data.frame(
+    grupo = grupo, dependiente = .nombres_para_operar(y),
+    stringsAsFactors = FALSE
   ))
 }
 
@@ -39,6 +39,88 @@
     n = n, x = x, y = y, grupo = grupo, pareja = pareja,
     conteos = tabulate(pareja), grupos = length(valores_x)
   )
+}
+
+# La ausencia declarada tiene que quitarse antes de agrupar, no despues de
+# publicar la dependencia: una misma fila invalida los dos sentidos del par.
+# La decision sobre la identidad la toma la mascara del resumen. Para texto que
+# el resumen reconoce como numero se usa su conversion, y para texto categorico
+# se conserva la identidad textual que la relacion puede comparar.
+.mascara_sentinelas_relacion <- function(x, sentinelas_numericos = NULL) {
+  declarados <- .sentinelas_numericos_declarados(sentinelas_numericos)
+  if (!length(declarados) || !length(x) || is.raw(x) ||
+      is.list(x) || .es_columna_compuesta(x) || inherits(x, c("Date", "POSIXt"))) {
+    return(rep(FALSE, length(x)))
+  }
+  valores <- if (inherits(x, "integer64")) {
+    # El resumen de integer64 compara por su identidad decimal exacta, no por un
+    # doble que podria haber perdido las cifras bajas.
+    .texto_identidad(x)
+  } else if (is.numeric(x)) {
+    as.numeric(x)
+  } else if (inherits(x, "difftime")) {
+    as.numeric(x)
+  } else if (is.character(x) || is.factor(x)) {
+    texto <- .texto_analizable(x)$valores
+    inferencia <- tryCatch(
+      .inferir_tipo_interno(texto, muestra = Inf, conservar_cache = TRUE),
+      error = function(e) NULL
+    )
+    cuantitativos <- if (!is.null(inferencia) &&
+                         as.character(inferencia$tipo) %in% c("entero", "doble")) {
+      tryCatch(
+        .valores_cuantitativos(
+          texto, inferencia, inferencia$formatos_fecha,
+          sentinelas_numericos = declarados
+        ),
+        error = function(e) NULL
+      )
+    } else NULL
+    if (is.list(cuantitativos) && cuantitativos$clase %in% c("numero", "integer64")) {
+      cuantitativos$valores
+    } else {
+      texto
+    }
+  } else {
+    return(rep(FALSE, length(x)))
+  }
+  .mascara_sentinelas_resumen(valores, declarados)
+}
+
+# Una sola validacion para las tres puertas que reciben la declaracion: el
+# perfil, las dependencias y las asociaciones. Las dos ultimas aceptan `NULL`,
+# que es no declarar nada.
+.validar_sentinelas_numericos <- function(sentinelas_numericos,
+                                          permitir_nulo = FALSE) {
+  if (permitir_nulo && is.null(sentinelas_numericos)) {
+    return(invisible(NULL))
+  }
+  if (!is.numeric(sentinelas_numericos) ||
+      any(!is.na(sentinelas_numericos) &
+          !is.finite(sentinelas_numericos))) {
+    .detener(
+      "`sentinelas_numericos` debe ser un vector num\u00e9rico finito; se permiten NA.",
+      call. = FALSE
+    )
+  }
+  invisible(NULL)
+}
+
+.enmascarar_sentinelas_relacion <- function(datos, sentinelas_numericos = NULL) {
+  if (!length(.sentinelas_numericos_declarados(sentinelas_numericos))) {
+    return(datos)
+  }
+  for (i in seq_along(datos)) {
+    mascara <- .mascara_sentinelas_relacion(
+      datos[[i]], sentinelas_numericos
+    )
+    if (any(mascara)) {
+      valores <- datos[[i]]
+      valores[mascara] <- NA
+      datos[[i]] <- valores
+    }
+  }
+  datos
 }
 
 .resumen_dependencia <- function(x, y, particion = NULL) {
@@ -153,6 +235,13 @@
   !.alcanza_umbral_dependencia(maximo_conformes, n, umbral)
 }
 
+# Las filas que acierta la moda del dependiente sin agrupar, sobre las mismas
+# filas que el resumen: las que tienen los dos valores presentes.
+.conformes_sin_determinante <- function(particion) {
+  if (!particion$n) return(0L)
+  max(tabulate(match(particion$y, unique(particion$y))))
+}
+
 .poda_dependencia_pares <- function(particion, umbral) {
   if (!particion$n) return(FALSE)
   # Misma forma que la cota debil, y por el mismo motivo de exactitud.
@@ -171,7 +260,11 @@
 #' Para evitar resultados vacíos o triviales, se omiten por defecto las claves
 #' únicas, los determinantes cuya tasa de valores distintos alcanza
 #' `umbral_casi_clave`, los determinantes cuya moda alcanza
-#' `umbral_casi_constante` y los dependientes constantes. El
+#' `umbral_casi_constante` y los dependientes constantes. Tampoco se informa un
+#' par cuyo determinante no acierta más filas que la moda del dependiente sin
+#' agrupar: con un dependiente casi constante —un `estado` que vale `"ACTIVO"`
+#' en el 99,7 % de las filas— cualquier columna alcanzaría el umbral sin
+#' aportar nada. El
 #' valor predeterminado de `umbral = 0.995` exige que como máximo 5 de cada
 #' 1.000 filas contradigan la relación. Los ausentes de cualquiera de las dos
 #' columnas no integran el cálculo.
@@ -184,21 +277,35 @@
 #'
 #' El costo crece aproximadamente como `columnas^2 * filas`. `max_columnas`
 #' conserva las primeras columnas analizables, `max_comparaciones` limita el
-#' número de pares columna a columna y `muestra` aplica una única muestra
-#' sistemática a toda la tabla, de modo que las relaciones entre filas no se
-#' rompen. `max_trabajo` acota el producto entre pares posibles y filas
+#' número de pares columna a columna y `muestra` aplica una única muestra de
+#' filas enteras a toda la tabla, de modo que las relaciones entre filas no se
+#' rompen. La muestra parte la tabla en tantos tramos consecutivos como filas
+#' pide y toma una de cada tramo, en una posición que sale de un hash
+#' determinista del número de tramo: es la misma en cada corrida, no usa el
+#' generador de números aleatorios ni su estado, y no se alinea con datos
+#' periódicos. `max_trabajo` acota el producto entre pares posibles y filas
 #' analizadas. Es un presupuesto estimado, no una medición de segundos: permite
 #' que el tope efectivo de pares baje cuando la tabla tiene muchas filas. Los
 #' atributos del resultado declaran todos los recortes.
 #'
 #' Una muestra conserva cada fila entera, pero no la cantidad de filas por
-#' valor: sobre datos agrupados en filas consecutivas, la muestra sistemática
-#' toma una fila de cada grupo y el determinante parece una clave. Por eso los
+#' valor: sobre datos agrupados en filas consecutivas, la muestra toma a lo
+#' sumo una fila de cada tramo y el determinante parece una clave. Por eso los
 #' descartes por casi-clave y casi-constante se verifican sobre la columna
 #' completa; si sólo la muestra los produjo, el motivo es
 #' `casi_clave_solo_en_muestra` o `casi_constante_solo_en_muestra`, la columna
 #' sigue fuera —evaluarla sobre esa muestra daría dependencias exactas sin
 #' evidencia— y [perfilar()] lo declara en `cobertura_diagnosticos`.
+#'
+#' Lo que la muestra encuentra se recalcula sobre la tabla completa: cada
+#' dependencia publicada sale con el cumplimiento, los grupos, las violaciones
+#' y la evidencia de todas las filas, y la que ya no alcanza el criterio no se
+#' publica. Una muestra puede mostrar exacta una relación que la tabla
+#' contradice —una muestra sistemática, a paso fijo, se alineaba con un panel
+#' mensual cuyo tamaño hacía que el paso cayera justo en el período, y tomaba
+#' siempre los mismos meses—. El recálculo cuesta una pasada por dependencia publicada y entra
+#' en `max_trabajo`; las que no entran conservan las cifras de la muestra, y
+#' [perfilar()] lo declara.
 #'
 #' @param datos Tabla que se desea examinar.
 #' @param umbral Cumplimiento mínimo en `[0, 1]`.
@@ -232,6 +339,11 @@
 #'   una columna que el léxico no reconoce —un legajo interno— publica sus
 #'   valores en `evidencia`. Sólo tiene efecto con
 #'   `proteger_datos_personales = TRUE`.
+#' @param sentinelas_numericos Vector de valores declarados como ausencia. Las
+#'   celdas que contienen un valor declarado no participan en la dependencia,
+#'   igual que una celda `NA`; por eso `n_evaluados` cuenta sólo las filas con
+#'   ambas columnas presentes. La lista por omisión no se considera una
+#'   declaración.
 #'
 #' @return Data frame de clase `dependencias_funcionales`, ordenado por
 #'   cumplimiento y soporte. `evidencia` cita contradicciones concretas, y **no
@@ -245,7 +357,11 @@
 #'   `n_pares_comparados`, `n_pares_sin_comparar` y `max_comparaciones`
 #'   documentan el presupuesto de comparaciones. `trabajo_estimado`,
 #'   `trabajo_comparado`, `trabajo_sin_comparar`, `unidad_trabajo` y
-#'   `max_trabajo` documentan el presupuesto por filas. `columnas_descartadas`
+#'   `max_trabajo` documentan el presupuesto por filas. Con muestra,
+#'   `verificadas_tabla_completa` dice, fila por fila, si las cifras se
+#'   recalcularon sobre la tabla completa, y `n_descartadas_tabla_completa`
+#'   cuenta las que la muestra mostraba y la tabla no sostiene.
+#'   `columnas_descartadas`
 #'   es un data frame que explica por qué una columna no se usó como
 #'   determinante. Una columna cuyo nombre se repite en la tabla no entra en
 #'   ninguna dependencia, de ningún lado, y se descarta con el motivo
@@ -271,13 +387,18 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
                                    max_comparaciones = 200000L,
                                    max_trabajo = 100000000,
                                    proteger_datos_personales = FALSE,
-                                   columnas_personales = character()) {
+                                   columnas_personales = character(),
+                                   sentinelas_numericos = NULL) {
   .validar_datos_tabla(datos)
   datos <- .tabla_base(datos)
   # La misma entrada que el perfil: un nivel `NA` de un factor es un faltante
   # -la dependencia lo contaba entre los pares presentes- y un `POSIXlt` es el
   # instante de un `POSIXct`. Ver `.normalizar_columnas_entrada()`.
   datos <- .normalizar_columnas_entrada(datos)
+  .validar_sentinelas_numericos(sentinelas_numericos, permitir_nulo = TRUE)
+  datos <- .enmascarar_sentinelas_relacion(
+    datos, sentinelas_numericos
+  )
   .validar_bandera_proteccion(proteger_datos_personales)
   columnas_personales <- .normalizar_columnas_personales(
     columnas_personales, names(datos)
@@ -339,7 +460,9 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
   # La desambiguacion es para nombres de trabajo, no para la salida: un sufijo
   # que no existe en `names(datos)` rompe la correspondencia del diagnostico.
   nombres <- names(datos)
-  muestreo <- .muestrear_vector(seq_len(nrow(datos)), limite)
+  # Una muestra que no se alinea con datos periodicos: ver
+  # `.muestrear_filas_dispersas()`.
+  muestreo <- .muestrear_filas_dispersas(nrow(datos), limite)
   # `as.data.frame()` antes de recortar: sobre un objeto `sf`, seleccionar
   # columnas vuelve a pegar la geometria que `seleccion` habia excluido, y
   # entonces `muestra_datos` queda con mas columnas que `seleccion`. Ademas de
@@ -380,9 +503,10 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
   }, character(1L))
   # Los motivos se deciden sobre la MUESTRA, y ni la tasa de distintos ni la
   # proporcion modal sobreviven al submuestreo. Sobre datos agrupados en
-  # corridas consecutivas -`1,1,2,2,...`- la muestra sistematica toma una fila
-  # por grupo y el determinante parece una clave; sobre `a,b,a,b` toma solo `a`
-  # y la columna parece constante. El descarte se publicaba con el motivo de la
+  # corridas consecutivas -`1,1,2,2,...`- una muestra de una fila por tramo
+  # toma a lo sumo una por grupo y el determinante parece una clave; sobre
+  # `a,b,a,b` una muestra a paso fijo tomaba solo `a` y la columna parecia
+  # constante. El descarte se publicaba con el motivo de la
   # TABLA, y la tabla de dependencias vacia se leia como "no hay dependencias"
   # cuando la tabla completa si la tenia. Evaluar el par sobre esa muestra no
   # arreglaria nada -cada grupo tendria una sola fila y la dependencia saldria
@@ -427,6 +551,7 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
     max_comparaciones, max_comparaciones_trabajo
   )
   filas <- list()
+  pares_publicados <- list()
   k <- 0L
   comparaciones <- 0
   presupuesto_agotado <- FALSE
@@ -456,7 +581,18 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
             !.alcanza_umbral_dependencia(
               resumen$n - resumen$violaciones, resumen$n, umbral
             )) next
+        # Un determinante que no acierta mas filas que la moda sola del
+        # dependiente no aporta nada: con `estado = "ACTIVO"` en el 99,66 % de
+        # las filas, CADA columna de la tabla -el departamento, el turno, el
+        # lote- "determinaba" el estado con cumplimiento 0,9966, la misma
+        # proporcion que la moda sin agrupar, y se publicaban cinco
+        # dependencias cuya evidencia mostraba los dos estados en cada grupo.
+        # Es la generalizacion del dependiente constante, que ya se omitia: el
+        # umbral se alcanza sin mirar el determinante.
+        if (resumen$n - resumen$violaciones <=
+            .conformes_sin_determinante(particion)) next
         k <- k + 1L
+        pares_publicados[[k]] <- c(seleccion[[i]], seleccion[[j]])
         filas[[k]] <- data.frame(
           determinante = nombres[[seleccion[[i]]]],
           dependiente = nombres[[seleccion[[j]]]],
@@ -472,22 +608,30 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
       if (presupuesto_agotado) break
     }
   }
+  verificacion <- .verificar_dependencias_tabla_completa(
+    filas, pares_publicados, datos, muestreo, umbral, min_observaciones,
+    max_ejemplos, max_trabajo
+  )
+  filas <- verificacion$filas
   resultado <- if (length(filas)) {
     do.call(rbind, filas)
   } else {
-    data.frame(
+    .data_frame_simple(
       determinante = character(), dependiente = character(),
       cumplimiento = numeric(), n_evaluados = integer(),
       n_grupos = integer(), n_violaciones = integer(), exacta = logical(),
       evidencia = character(), stringsAsFactors = FALSE
   )
   }
+  verificadas <- verificacion$verificadas
   if (nrow(resultado)) {
-    resultado <- resultado[.orden_por_bytes(
+    orden <- .orden_por_bytes(
       -resultado$cumplimiento, -resultado$n_evaluados,
       .nombres_para_operar(resultado$determinante),
       .nombres_para_operar(resultado$dependiente)
-    ), , drop = FALSE]
+    )
+    resultado <- resultado[orden, , drop = FALSE]
+    verificadas <- verificadas[orden]
     rownames(resultado) <- NULL
   }
   # La evidencia cita VALORES de la tabla -`"2.107.507-7" -> "Rosario ..." |
@@ -534,7 +678,7 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
   # fue: subir `max_columnas` resuelve el primero y no hace nada con el segundo.
   attr(resultado, "columnas_no_analizables") <-
     nombres[setdiff(seq_along(datos), analizables)]
-  attr(resultado, "columnas_descartadas") <- data.frame(
+  attr(resultado, "columnas_descartadas") <- .data_frame_simple(
     columna = nombres[seleccion[nzchar(motivos)]],
     motivo = unname(motivos[nzchar(motivos)]),
     stringsAsFactors = FALSE
@@ -555,6 +699,12 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
    attr(resultado, "unidad_trabajo") <- "fila-par"
    attr(resultado, "max_trabajo") <- max_trabajo
   attr(resultado, "presupuesto_agotado") <- presupuesto_agotado
+  # Solo con muestra: sin ella no hay nada que verificar y el objeto queda como
+  # siempre.
+  if (isTRUE(muestreo$muestreado)) {
+    attr(resultado, "verificadas_tabla_completa") <- verificadas
+    attr(resultado, "n_descartadas_tabla_completa") <- verificacion$descartadas
+  }
   attr(resultado, "truncado") <- length(seleccion) < length(analizables) ||
     presupuesto_agotado
   # El tope aplicado se conserva: sin el, quien ve columnas omitidas no puede
@@ -563,6 +713,66 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
   attr(resultado, "seleccion_posicional") <- TRUE
   attr(resultado, "umbral") <- umbral
   resultado
+}
+
+# **Lo que la muestra publica se verifica sobre la tabla.** Los descartes por
+# casi-clave y casi-constante ya se verificaban sobre la columna completa; el
+# cumplimiento de lo que se publicaba, no. Y una muestra puede mostrar lo que la
+# tabla contradice: la sistematica, a paso fijo, que se usaba antes de
+# `.muestrear_filas_dispersas()`, se alineaba con los datos periodicos cuando el
+# paso caia justo en el periodo. Medido entonces, un panel
+# mensual de 50.000 entidades al que le faltan sus ultimas 5 filas -599.995, paso
+# 6 exacto- toma solo los meses 1 y 7, y publicaba `entidad -> categoria` exacta
+# con las 5.000 filas de los meses 3 y 4 que la contradicen (cumplimiento real
+# 0,9917, por debajo de 0,995); con 600.000 filas el paso deriva y no publicaba
+# nada. Cada par publicado se recalcula sobre las filas completas y sale con esas
+# cifras, o no sale si ya no alcanza el criterio. El costo es una pasada por par
+# publicado, y se acota con el mismo `max_trabajo` de la busqueda, en filas-par:
+# lo que no entra conserva las cifras de la muestra y lo dice
+# `verificadas_tabla_completa`.
+.verificar_dependencias_tabla_completa <- function(filas, pares, datos, muestreo,
+                                                   umbral, min_observaciones,
+                                                   max_ejemplos, max_trabajo) {
+  verificadas <- rep(!isTRUE(muestreo$muestreado), length(filas))
+  if (!isTRUE(muestreo$muestreado) || !length(filas)) {
+    return(list(filas = filas, verificadas = verificadas, descartadas = 0L))
+  }
+  n_filas <- as.numeric(nrow(datos))
+  cupo <- if (is.infinite(max_trabajo) || !n_filas) Inf else
+    floor(max_trabajo / n_filas)
+  # Las de mayor cumplimiento primero: son las que la muestra pudo haber hecho
+  # exactas sin serlo, y las que un lector toma por reglas.
+  orden <- .orden_por_bytes(
+    -vapply(filas, function(f) f$cumplimiento[[1L]], numeric(1L)),
+    seq_along(filas)
+  )
+  conservar <- rep(TRUE, length(filas))
+  for (posicion in seq_along(orden)) {
+    if (posicion > cupo) break
+    f <- orden[[posicion]]
+    x <- .subset2(datos, pares[[f]][[1L]])
+    y <- .subset2(datos, pares[[f]][[2L]])
+    particion <- .particion_dependencia(x, y)
+    resumen <- .resumen_dependencia(x, y, particion = particion)
+    verificadas[[f]] <- TRUE
+    conformes <- resumen$n - resumen$violaciones
+    if (resumen$n < min_observaciones ||
+        !.alcanza_umbral_dependencia(conformes, resumen$n, umbral) ||
+        conformes <= .conformes_sin_determinante(particion)) {
+      conservar[[f]] <- FALSE
+      next
+    }
+    filas[[f]]$cumplimiento <- resumen$cumplimiento
+    filas[[f]]$n_evaluados <- resumen$n
+    filas[[f]]$n_grupos <- resumen$grupos
+    filas[[f]]$n_violaciones <- resumen$violaciones
+    filas[[f]]$exacta <- resumen$violaciones == 0L
+    filas[[f]]$evidencia <- .evidencia_dependencia(resumen, max_ejemplos)
+  }
+  list(
+    filas = filas[conservar], verificadas = verificadas[conservar],
+    descartadas = sum(!conservar)
+  )
 }
 
 # Por indice y no por nombre: `datos[[nombre]]` traduce el nombre, y uno marcado
@@ -615,8 +825,11 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
     columnas_repetidas <- descartadas$columna[descartadas$motivo == "nombre_repetido"]
     columnas_repetidas[!duplicated(.nombres_para_operar(columnas_repetidas))]
   } else character()
+  verificadas <- attr(dependencias, "verificadas_tabla_completa", exact = TRUE)
+  sin_verificar <- if (length(verificadas)) sum(!verificadas) else 0L
   if (!truncado_columnas && !presupuesto_agotado &&
-      !length(no_analizables) && !nrow(por_muestra) && !length(repetidas)) {
+      !length(no_analizables) && !nrow(por_muestra) && !length(repetidas) &&
+      !sin_verificar) {
     return(NULL)
   }
   omitidas <- attr(dependencias, "columnas_omitidas", exact = TRUE)
@@ -638,7 +851,8 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
   if (length(no_analizables)) {
     motivos <- c(motivos, paste0(
       "No se buscaron dependencias en ", length(no_analizables),
-      " columnas cuyo tipo no se puede agrupar -listas, matrices y vectores ",
+      if (length(no_analizables) == 1L) " columna cuyo tipo no se puede agrupar -lista, matriz o vector " else
+        " columnas cuyo tipo no se puede agrupar -listas, matrices y vectores ",
       "de bytes-: ", paste(no_analizables, collapse = ", "), "."
     ))
     soluciones <- c(soluciones, paste0(
@@ -661,8 +875,10 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
     motivos <- c(motivos, paste0(
       "La b\u00fasqueda de dependencias se limit\u00f3 a las primeras ",
       if (is.null(tope)) length(analizadas) else tope,
-      " columnas analizables por posici\u00f3n: analiz\u00f3 ", length(analizadas),
-      " y dej\u00f3 ", length(omitidas), " fuera del diagn\u00f3stico."
+      if (length(analizadas) == 1L) " columna analizable por posici\u00f3n: analiz\u00f3 " else
+        " columnas analizables por posici\u00f3n: analiz\u00f3 ", length(analizadas),
+      if (length(omitidas) == 1L) " y dej\u00f3 1 fuera del diagn\u00f3stico." else
+        paste0(" y dej\u00f3 ", length(omitidas), " fuera del diagn\u00f3stico.")
     ))
     soluciones <- c(soluciones, paste0(
       "Aumentar `max_columnas_dependencias` o perfilar por bloques si las ",
@@ -673,7 +889,8 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
   if (nrow(por_muestra)) {
     motivos <- c(motivos, paste0(
       "La muestra de ", attr(dependencias, "filas_analizadas", exact = TRUE),
-      " filas hizo parecer clave o constante a columnas que en la tabla ",
+      if (attr(dependencias, "filas_analizadas", exact = TRUE) == 1L) " fila hizo parecer clave o constante a columnas que en la tabla " else
+        " filas hicieron parecer clave o constante a columnas que en la tabla ",
       "completa no lo son, y se descartaron: ",
       paste0(por_muestra$columna, " (", por_muestra$motivo, ")", collapse = ", "),
       ". Sus dependencias no se evaluaron: que no aparezcan no significa que no ",
@@ -682,8 +899,24 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
     soluciones <- c(soluciones, paste0(
       "Perfilar con `muestra = Inf` -o llamar a `detectar_dependencias()` con ",
       "`muestra = Inf`- si la tabla lo permite. Pasa cuando los datos vienen ",
-      "agrupados en filas consecutivas y la muestra, que es sistematica, toma ",
-      "una fila de cada grupo."
+      "agrupados en filas consecutivas y la muestra, que toma una fila de cada ",
+      "tramo de la tabla, toma una sola de cada grupo."
+    ))
+  }
+  if (sin_verificar) {
+    motivos <- c(motivos, paste0(
+      sin_verificar,
+      if (sin_verificar == 1L) " dependencia publicada conserva" else
+        " dependencias publicadas conservan",
+      " el cumplimiento de la muestra de ",
+      attr(dependencias, "filas_analizadas", exact = TRUE), " filas: el ",
+      "presupuesto de trabajo no alcanz\u00f3 para recalcularlas sobre las ",
+      attr(dependencias, "filas_totales", exact = TRUE), " filas de la tabla. ",
+      "`attr(dependencias, \"verificadas_tabla_completa\")` dice cu\u00e1les."
+    ))
+    soluciones <- c(soluciones, paste0(
+      "Aumentar `max_trabajo_dependencias` -o `max_trabajo` en ",
+      "`detectar_dependencias()`- para recalcularlas todas."
     ))
   }
   if (presupuesto_agotado) {
@@ -691,13 +924,16 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
       "El presupuesto de trabajo se agot\u00f3: se compararon ",
       attr(dependencias, "n_pares_comparados", exact = TRUE), " de ",
       attr(dependencias, "n_pares_posibles", exact = TRUE),
-      " pares determinante-dependiente y ",
+      if (attr(dependencias, "n_pares_posibles", exact = TRUE) == 1L) " par determinante-dependiente y " else
+        " pares determinante-dependiente y ",
       attr(dependencias, "trabajo_comparado", exact = TRUE), " de ",
       attr(dependencias, "trabajo_estimado", exact = TRUE),
-      " unidades fila-par; quedaron ",
+      if (attr(dependencias, "trabajo_estimado", exact = TRUE) == 1L) " unidad fila-par; quedaron " else
+        " unidades fila-par; quedaron ",
       attr(dependencias, "n_pares_sin_comparar", exact = TRUE),
-      " pares y ", attr(dependencias, "trabajo_sin_comparar", exact = TRUE),
-      " unidades sin comparar."
+      if (attr(dependencias, "n_pares_sin_comparar", exact = TRUE) == 1L) " par y " else " pares y ",
+      attr(dependencias, "trabajo_sin_comparar", exact = TRUE),
+      if (attr(dependencias, "trabajo_sin_comparar", exact = TRUE) == 1L) " unidad sin comparar." else " unidades sin comparar."
     ))
     soluciones <- c(soluciones, paste0(
       "Aumentar `max_trabajo` o `max_comparaciones`, o reducir `muestra`, si se ",
@@ -708,6 +944,10 @@ detectar_dependencias <- function(datos, umbral = 0.995, muestra = 1e5,
     "dependencias_funcionales",
     diagnostico_columna,
     paste(motivos, collapse = " "),
-    paste(soluciones, collapse = " ")
+    paste(soluciones, collapse = " "),
+    columnas = unique(c(
+      omitidas, no_analizables, repetidas,
+      if (nrow(por_muestra)) por_muestra$columna else character()
+    ))
   )
 }

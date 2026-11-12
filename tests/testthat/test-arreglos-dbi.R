@@ -269,7 +269,7 @@ test_that("perfilar_dbi publica la clave y lee un solo catalogo", {
     columnas = "id", fuente = "catalogo", motivo = NA_character_,
     garantia = "desconocida", estado = list(visible = FALSE)
   )
-  expect_match(lupa:::.texto_clave_dbi(oculta), "catalogo no deja ver la clave")
+  expect_match(lupa:::.texto_clave_dbi(oculta), "cat\u00e1logo no deja ver la clave")
 })
 
 test_that("el universo muestreado no usa la clave como atajo de distintos", {
@@ -298,13 +298,17 @@ test_that("un motor que rechaza LIMIT en la muestra no se lleva el resumen", {
   bases <- .conexion_juguete(modo = "sin_limite_final")
   on.exit(DBI::dbDisconnect(bases$cruda), add = TRUE)
 
-  resultado <- NULL
-  expect_warning(
-    resultado <- .perfilar_juguete(
+  avisos <- character()
+  resultado <- withCallingHandlers(
+    .perfilar_juguete(
       bases$juguete, muestra = 5L, orden_muestra = "id"
     ),
-    class = "lupa_muestra_dbi_no_disponible"
+    warning = function(w) {
+      avisos <<- c(avisos, class(w)[[1L]])
+      invokeRestart("muffleWarning")
+    }
   )
+  expect_true("lupa_aviso_muestra_motor" %in% avisos)
   expect_s3_class(resultado, "perfil_dbi")
   # El resumen completo se devuelve: es lo que ya estaba medido.
   expect_equal(nrow(resultado$resumen_tabla$columnas), 3L)
@@ -449,7 +453,7 @@ test_that("el adaptador de dialecto escribe cada capacidad como corresponde", {
   expect_null(dialectos$rownum$limitar("SELECT a FROM t", 5L, 19))
 })
 
-test_that("sin dialecto de limite la mediana se declara en vez de traer la tabla", {
+test_that("sin dialecto de limite la mediana sale de la CTE y no trae la tabla", {
   bases <- .conexion_juguete()
   on.exit(DBI::dbDisconnect(bases$cruda), add = TRUE)
 
@@ -461,13 +465,16 @@ test_that("sin dialecto de limite la mediana se declara en vez de traer la tabla
     resultado$resumen_tabla$sql$metrica == "mediana", , drop = FALSE
   ]
   fila_monto <- medianas[medianas$columna == "monto", , drop = FALSE]
-  expect_identical(fila_monto$estado, "no_disponible")
-  expect_match(fila_monto$motivo, "salto de filas")
-  expect_true(is.na(
-    resultado$resumen_tabla$columnas$mediana[
+  # La via de dos consultas no se puede escribir sin salto de filas; la CTE de
+  # ventanas no lo necesita y calcula la mediana en el motor, en una sentencia.
+  expect_identical(fila_monto$estado, "calculado")
+  expect_identical(fila_monto$metodo, "cte_ventana")
+  expect_identical(
+    as.numeric(resultado$resumen_tabla$columnas$mediana[
       resultado$resumen_tabla$columnas$columna == "monto"
-    ]
-  ))
+    ]),
+    stats::median(.tabla_juguete()$monto, na.rm = TRUE)
+  )
   # Y el resto de las metricas sigue viniendo entero.
   expect_false(is.na(
     resultado$resumen_tabla$columnas$media[
@@ -506,13 +513,17 @@ test_that("lo que no entra en el presupuesto se declara, y nunca queda en cero",
   # agota antes de leer la muestra, el paquete lo dice. Declararlo con
   # `expect_warning()` lo convierte de ruido en comprobacion, y ademas fija que
   # el aviso siga apareciendo si alguien toca ese camino.
-  expect_warning(
-    resultado <- .perfilar_juguete(
+  avisos <- character()
+  resultado <- withCallingHandlers(
+    .perfilar_juguete(
       bases$juguete, muestra = 5L, orden_muestra = "id", max_consultas = 8
     ),
-    "no se pudo leer la muestra|presupuesto",
-    ignore.case = TRUE
+    warning = function(w) {
+      avisos <<- c(avisos, class(w)[[1L]])
+      invokeRestart("muffleWarning")
+    }
   )
+  expect_true("lupa_aviso_muestra_motor" %in% avisos)
   expect_lte(resultado$resumen_tabla$meta$consultas$emitidas, 8)
   expect_true(resultado$resumen_tabla$meta$consultas$agotado)
   registros <- resultado$resumen_tabla$sql
@@ -757,7 +768,7 @@ test_that("catalogo alinea el plan y la corrida y publica su fuente de moda", {
   expect_true(all(distintos_exacta$estado == "calculado"))
   expect_identical(
     resultado_exacta$resumen_tabla$meta$costo_moda$fuentes_cardinalidad,
-    "medicion de la corrida"
+    "medici\u00f3n de la corrida"
   )
 })
 

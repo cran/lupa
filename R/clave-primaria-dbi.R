@@ -38,7 +38,7 @@
   }
   if (grepl("Odbc|ODBC", clase)) {
     motor <- tryCatch(
-      as.character(DBI::dbGetInfo(conexion)$dbms.name),
+      as.character(.info_dbi_corrida(conexion)$dbms.name),
       error = function(e) ""
     )
     if (length(motor) && grepl(.regex_sin_caja("oracle"), motor)) {
@@ -83,6 +83,11 @@
       nombre = "information_schema",
       motores = "MySQL, SQL Server",
       sql = function(esquema, tabla, motor = "desconocido") {
+        posicion <- if (identical(motor, "mysql")) {
+          "CAST(k.ordinal_position AS SIGNED)"
+        } else {
+          "k.ordinal_position"
+        }
         estado <- if (identical(motor, "mysql")) {
           ", t.enforced AS constraint_enforced"
         } else {
@@ -130,7 +135,7 @@
           ""
         }
         paste0(
-          "SELECT k.column_name, k.ordinal_position", estado, ", ",
+          "SELECT k.column_name, ", posicion, " AS ordinal_position", estado, ", ",
           "t.table_schema AS constraint_esquema, ",
           "t.constraint_name AS constraint_nombre ",
           "FROM information_schema.table_constraints t ",
@@ -421,15 +426,16 @@
     character()
   }
   paste0(
-    "El catalogo devolvio la clave primaria de ", distintas,
-    " relaciones distintas para ese nombre",
+    "El cat\u00e1logo devolvi\u00f3 la clave primaria de ", distintas,
+    if (distintas == 1L) " relaci\u00f3n distinta para ese nombre" else
+      " relaciones distintas para ese nombre",
     if (length(esquemas) > 1L) {
       paste0(" -esquemas: ", paste(esquemas, collapse = ", "), "-")
     } else {
       ""
     },
-    ". Fusionarlas daria una clave que no existe en ninguna, asi que no se ",
-    "publica ninguna: calificar el nombre con su esquema resuelve cual es."
+    ". Fusionarlas dar\u00eda una clave que no existe en ninguna, as\u00ed que no se ",
+    "publica ninguna: calificar el nombre con su esquema resuelve cu\u00e1l es."
   )
 }
 
@@ -457,7 +463,7 @@
   descendientes <- .campo_clave(datos, "constraint_descendientes")
   relkind <- .campo_clave(datos, "constraint_relkind")
   # `pg_inherits` registra tanto la herencia tradicional como el particionado
-  # declarativo, y sólo la primera deja filas fuera del alcance de la clave.
+  # declarativo, y solo la primera deja filas fuera del alcance de la clave.
   # Medido contra PostgreSQL 16: una tabla `relkind = 'r'` con un hijo que
   # repite un valor da 6001 validos y 6000 distintos; una `relkind = 'p'` con
   # dos particiones da 19999 y 19999. En PostgreSQL anterior a la version 10 no
@@ -611,13 +617,13 @@
   list(
     garantia = "desconocida", estado = estado,
     motivo = paste0(
-      "La clave esta declarada y sus columnas se leyeron del catalogo, pero ",
-      "el motor no permite confirmar que la restriccion este aplicada: la via ",
+      "La clave est\u00e1 declarada y sus columnas se leyeron del cat\u00e1logo, pero ",
+      "el motor no permite confirmar que la restricci\u00f3n est\u00e9 aplicada: la v\u00eda ",
       "`", via, "` sobre `", motor, "` no expone ",
       if (length(faltantes)) paste0("`", paste(faltantes, collapse = "`, `"), "`")
       else "un estado comparable",
       ". No es un privilegio que falte ni un defecto de la tabla: es lo que ",
-      "ese catalogo publica."
+      "ese cat\u00e1logo publica."
     )
   )
 }
@@ -703,12 +709,12 @@
   catalogo$columnas <- character()
   catalogo$garantia <- "desconocida"
   catalogo$motivo <- paste0(
-    "El catalogo declaro una clave primaria sobre ",
+    "El cat\u00e1logo declar\u00f3 una clave primaria sobre ",
     paste(ajenas, collapse = ", "),
-    if (length(ajenas) > 1L) ", que no estan " else ", que no esta ",
+    if (length(ajenas) > 1L) ", que no est\u00e1n " else ", que no est\u00e1 ",
     "entre las columnas de la tabla medida: la respuesta pertenece a otra ",
-    "relacion con el mismo nombre en otro esquema. No se publica clave; ",
-    "calificar el nombre con su esquema resuelve cual es."
+    "relaci\u00f3n con el mismo nombre en otro esquema. No se publica clave; ",
+    "calificar el nombre con su esquema resuelve cu\u00e1l es."
   )
   catalogo$estado <- .estado_clave_vacio(visible = TRUE)
   catalogo
@@ -725,7 +731,7 @@
     )
   }
   if (!length(tabla) || is.na(tabla) || !nzchar(tabla)) {
-    return(vacio(NA_character_, "No se indico la tabla."))
+    return(vacio(NA_character_, "No se indic\u00f3 la tabla."))
   }
   nombre_via <- .via_clave_primaria(conexion)
   motor <- .motor_clave_primaria(conexion)
@@ -736,7 +742,9 @@
   } else {
     via$sql(esquema, tabla)
   }
-  respuesta <- .consultar_dbi(conexion, sql, presupuesto)
+  respuesta <- .consultar_dbi(
+    conexion, sql, presupuesto, etapa = "clave_primaria"
+  )
   if (!isTRUE(respuesta$ok)) {
     return(vacio(
       via$nombre, paste0(
@@ -763,7 +771,7 @@
       # Cero filas pidiendo todas las columnas: la tabla no esta.
       return(vacio(via$nombre, paste0(
         via$nombre, ": la tabla no existe o no es visible, ",
-        "asi que no se pudo preguntar por su clave."
+        "as\u00ed que no se pudo preguntar por su clave."
       ), visible = NA))
     }
     if (.catalogo_clave_visible(via$nombre, motor)) {
@@ -781,7 +789,7 @@
     return(vacio(
       via$nombre,
       motivo = paste0(
-        via$nombre, ": no devolvio filas; la clave puede no estar declarada ",
+        via$nombre, ": no devolvi\u00f3 filas; la clave puede no estar declarada ",
         "o no ser visible para esta credencial."
       ),
       garantia = "desconocida", visible = NA
@@ -792,7 +800,7 @@
     if (is.null(nombre_clave)) {
       return(vacio(
         via$nombre,
-        "show_index: la consulta no devolvio el campo `Key_name`.",
+        "show_index: la consulta no devolvi\u00f3 el campo `Key_name`.",
         visible = NA
       ))
     }

@@ -27,7 +27,7 @@ test_that("un valor que la conversion pierde no se publica como calculado", {
   registros <- perfil$resumen_tabla$sql
   basicos <- registros[registros$metrica %in% c("minimo", "maximo", "media"), ]
   expect_true(all(basicos$estado == "no_disponible"))
-  expect_match(basicos$motivo[[1L]], "no se pudo leer como numero")
+  expect_match(basicos$motivo[[1L]], "no se pudo leer como n\u00famero")
   # El valor que devolvio el motor viaja en el motivo: el diagnostico no
   # reemplaza la evidencia.
   expect_match(basicos$motivo[[1L]], "2020-01-01", fixed = TRUE)
@@ -36,7 +36,7 @@ test_that("un valor que la conversion pierde no se publica como calculado", {
 test_that("un entero por encima de 2^53 no se publica redondeado", {
   skip_if_not_installed("DBI")
   skip_if_not_installed("RSQLite")
-  skip_if_not_installed("bit64", "4.6.0")
+  skip_if_not_installed("bit64")
   con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   datos <- data.frame(id = 1:5)
@@ -92,7 +92,7 @@ test_that("el plan declara un rango sin consultar los datos", {
 })
 
 test_that("la puerta de exactitud cubre el entero que redondea hacia el limite", {
-  skip_if_not_installed("bit64", "4.6.0")
+  skip_if_not_installed("bit64")
   # 2^53+1 pasa a doble como 2^53, asi que comparar el doble ya convertido
   # contra el limite deja pasar el unico caso que hay que atajar.
   limite <- bit64::as.integer64("9007199254740993")
@@ -148,7 +148,7 @@ test_that("la mediana y el desvio siguen a la magnitud que los basicos desmiente
   ]
   expect_true(nrow(numericas) >= 3L)
   expect_true(all(numericas$estado == "no_disponible"))
-  expect_true(any(grepl("no se pudo leer como numero", numericas$motivo)))
+  expect_true(any(grepl("no se pudo leer como n\u00famero", numericas$motivo)))
 
   # Y la mitad de control, que es la que decide si la guarda mide o calla: una
   # columna numerica de verdad, en la MISMA tabla y la misma corrida, sigue
@@ -194,7 +194,7 @@ test_that("el sondeo de magnitud cierra la puerta sin pedir basicos", {
   ]
   expect_true(nrow(numericas) >= 2L)
   expect_true(all(numericas$estado == "no_disponible"))
-  expect_true(any(grepl("no se pudo leer como numero", numericas$motivo)))
+  expect_true(any(grepl("no se pudo leer como n\u00famero", numericas$motivo)))
 
   sondeo <- registros[
     registros$columna == "mezcla" &

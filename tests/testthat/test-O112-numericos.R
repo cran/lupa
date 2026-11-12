@@ -5,7 +5,7 @@
 testthat::skip_on_cran()
 
 test_that("una numeracion por encima de 2^53 no se declara no densa", {
-  skip_if_not_installed("bit64", "4.6.0")
+  skip_if_not_installed("bit64")
   grande <- bit64::as.integer64("9000000000000000000") + bit64::as.integer64(1:1000)
   p <- suppressWarnings(perfilar(data.frame(ids = grande)))
   # Antes: tres veredictos FALSE y ninguna fila en la cobertura.
@@ -20,7 +20,7 @@ test_that("una numeracion por encima de 2^53 no se declara no densa", {
 })
 
 test_that("la descripcion de enteros fuera de precision dice como se guardan", {
-  skip_if_not_installed("bit64", "4.6.0")
+  skip_if_not_installed("bit64")
   g <- bit64::as.integer64("9000000000000000000") + bit64::as.integer64(1:50)
   p <- suppressWarnings(perfilar(data.frame(
     i64 = g, txt = as.character(g), stringsAsFactors = FALSE
@@ -45,6 +45,6 @@ test_that("el motivo de Benford no publica una comparacion que se lee falsa", {
   expect_false(any(grepl("3.000 < 3", motivos, fixed = TRUE)))
   expect_true(any(grepl("2.9996 < 3", motivos, fixed = TRUE)))
   # Control: lo que ya se distinguia con tres decimales no cambia.
-  expect_true(any(grepl("proporcion de positivos 0.900 < 1.000", motivos,
+  expect_true(any(grepl("proporci\u00f3n de positivos 0.900 < 1.000", motivos,
                         fixed = TRUE)))
 })

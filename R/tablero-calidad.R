@@ -364,7 +364,7 @@
       call. = FALSE
     )
   }
-  data.frame(
+  .data_frame_simple(
     metrica_instanciada = metricas,
     agregacion = unname(elegidas[.indice_identificador(metricas, names(elegidas))]),
     umbral = unname(umbral[.indice_identificador(metricas, names(umbral))]),
@@ -380,16 +380,14 @@
   granularidad <- unique(medidas$granularidad)[[1L]]
   switch(
     granularidad,
-    instanciaAtributo = interaction(
-      addNA(.factor_por_bytes(.nombres_para_operar(medidas$entidad))),
-      addNA(.factor_por_bytes(.nombres_para_operar(medidas$atributo))),
-      drop = TRUE, lex.order = TRUE, sep = "\034"
-    ),
-    atributo = interaction(
-      addNA(.factor_por_bytes(.nombres_para_operar(medidas$entidad))),
-      addNA(.factor_por_bytes(.nombres_para_operar(medidas$atributo))),
-      drop = TRUE, lex.order = TRUE, sep = "\034"
-    ),
+    instanciaAtributo = .codigos_filas_combinados(list(
+      as.integer(addNA(.factor_por_bytes(.nombres_para_operar(medidas$entidad)))),
+      as.integer(addNA(.factor_por_bytes(.nombres_para_operar(medidas$atributo))))
+    )),
+    atributo = .codigos_filas_combinados(list(
+      as.integer(addNA(.factor_por_bytes(.nombres_para_operar(medidas$entidad)))),
+      as.integer(addNA(.factor_por_bytes(.nombres_para_operar(medidas$atributo))))
+    )),
     instanciaEntidad = addNA(.factor_por_bytes(.nombres_para_operar(medidas$entidad))),
     entidad = addNA(.factor_por_bytes(.nombres_para_operar(medidas$entidad))),
     # El resto de las granularidades agrupaba SOLO por `objeto_medible`, y la
@@ -402,11 +400,11 @@
     # La entidad entra a la clave porque la promesa dice que es parte de la
     # identidad de la celda: agrupar por menos de lo que se publica como
     # identidad es fundir dos cosas que el objeto declara distintas.
-    interaction(
-      addNA(.factor_por_bytes(.nombres_para_operar(medidas$entidad))),
-      .factor_por_bytes(.nombres_para_operar(medidas$objeto_medible), exclude = NULL),
-      drop = TRUE, lex.order = TRUE, sep = "\034"
-    )
+    .codigos_filas_combinados(list(
+      as.integer(addNA(.factor_por_bytes(.nombres_para_operar(medidas$entidad)))),
+      as.integer(.factor_por_bytes(.nombres_para_operar(medidas$objeto_medible),
+                                   exclude = NULL))
+    ))
   )
 }
 
@@ -466,7 +464,8 @@
   }
   if (length(presentes) == 1L) {
     return(paste0(
-      "Los ", NROW(componentes), " componentes salen del mismo universo (",
+      if (NROW(componentes) == 1L) "La componente sale del mismo universo (" else
+        paste0("Los ", NROW(componentes), " componentes salen del mismo universo ("),
       presentes, "), as\u00ed que el \u00edndice combina unidades comparables. Los pesos ",
       "siguen siendo los que declar\u00f3 quien lo solicit\u00f3."
     ))
@@ -527,7 +526,7 @@
       valor <- .calcular_agregacion(
         valores, contrato$agregacion, contrato$umbral, NULL
       )
-      partes[[length(partes) + 1L]] <- data.frame(
+      partes[[length(partes) + 1L]] <- .data_frame_simple(
         id_medida = "",
         id_medicion = actuales$id_medicion[[primero]],
         fecha = actuales$fecha[[primero]],
@@ -616,7 +615,7 @@
     all(!medidas$granularidad %in% c("instanciaAtributo", "instanciaEntidad"))
   if (ya_agregadas && (!is.null(agregaciones) || !is.null(umbrales))) {
     .detener(
-      "Una medici\u00f3n ya agregada conserva su agregaci\u00f3n; para cambiarla use las medidas de origen.",
+      "Una medici\u00f3n ya agregada conserva su agregaci\u00f3n; para cambiarla, usar las medidas de origen.",
       call. = FALSE
     )
   }
@@ -664,7 +663,7 @@
       agregada, i, agregada$granularidad[[i]], varias_entidades
     )
   }, character(1L))
-  tablero <- data.frame(
+  tablero <- .data_frame_simple(
     componente = paste0("componente-", sprintf("%04d", seq_len(nrow(agregada)))),
     dimension = agregada$dimension,
     factor = agregada$factor,
@@ -712,7 +711,7 @@
     repetidas <- unique(clave_celda[duplicated(clave_celda)])
     cuales <- which(clave_celda %in% repetidas)
     .detener(
-      "Dos celdas del tablero tendrian la misma identidad, y la identidad de ",
+      "Dos celdas del tablero tendr\u00edan la misma identidad, y la identidad de ",
       "una celda son `metrica_instanciada`, `entidad` y `objeto`: ",
       paste0(
         "`", tablero$metrica_instanciada[cuales], "` + `",
@@ -720,7 +719,7 @@
         "` (valor ", format(tablero$valor[cuales]), ")",
         collapse = "; "
       ),
-      ". Revise que las medidas provengan de una sola corrida.",
+      ". Revisar que las medidas provengan de una sola corrida.",
       call. = FALSE
     )
   }
@@ -772,9 +771,11 @@
 #' dos filas con la **misma** identidad y valores distintos, y rehacer la celda
 #' con las claves publicadas mezclaría las medidas de las dos sin reproducir
 #' ninguna.
-#' `metrica_instanciada` sola tampoco alcanza: sobre un agregado vale
+#' `metrica_instanciada` sola tampoco alcanza: sobre un agregado usual vale
 #' `agregada:<funcion>:<metrica>` para todas las filas, y ahí la entidad es lo
-#' único que separa. Cuando hay varias entidades, `objeto` además nombra la
+#' único que separa. En una agregación de instancias de entidad a entidad,
+#' conserva además la instancia completa para que dos claves de una tabla no se
+#' fundan. Cuando hay varias entidades, `objeto` además nombra la
 #' tabla —`cod (tabla: t1)`—, en el mismo idioma con el que la granularidad de
 #' tabla publica `(tabla: t1)`.
 #'

@@ -183,7 +183,7 @@ test_that("H3: los extremos exactos de un entero que no entra en un doble se com
 })
 
 test_that("H3: un integer64 por encima de 2^53 compara su rango exacto", {
-  skip_if_not_installed("bit64", "4.6.0")
+  skip_if_not_installed("bit64")
   base <- bit64::as.integer64("1152921504606846976")
   anterior <- .perfil_o140(
     data.frame(id = base + bit64::as.integer64(c(0, 10, 20))), .f1_o140
@@ -373,6 +373,8 @@ test_that("H7: sin tipo de un lado no se afirma un cambio temporal", {
 test_that("H7: fechas que el motor devuelve como fechas no publican un cambio de tipo", {
   skip_if_not_installed("DBI")
   skip_if_not_installed("RSQLite")
+  # `extended_types = TRUE` exige `hms`, que es de RSQLite y no de lupa.
+  skip_if_not_installed("hms")
   datos <- data.frame(fecha = as.Date("2026-01-01") + c(0, 5, 5, 9))
   con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:", extended_types = TRUE)
   on.exit(DBI::dbDisconnect(con), add = TRUE)

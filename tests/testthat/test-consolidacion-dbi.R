@@ -92,6 +92,15 @@ setMethod(
   )
 }
 
+.perfilar_consolidacion_con_aviso <- function(conexion, ...) {
+  resultado_env <- new.env(parent = emptyenv())
+  expect_warning(
+    resultado_env$resultado <- .perfilar_consolidacion_dbi(conexion, ...),
+    class = "lupa_aviso_muestra_motor"
+  )
+  resultado_env$resultado
+}
+
 test_that("el plan predice exactamente los cinco casos contando solo dbSendQuery", {
   bases <- .conexion_consolidacion_dbi()
   on.exit(DBI::dbDisconnect(bases$cruda), add = TRUE)
@@ -110,8 +119,8 @@ test_that("el plan predice exactamente los cinco casos contando solo dbSendQuery
       list(bases$conexion, tamano_lote = 2L), argumentos
     ))
     if (identical(caso, "muestreado")) {
-      # I2 paga una única selección y el costo histórico del plan todavía
-      # conserva las sondas que no ejecuta la vía de spool.
+      # I2 paga una unica seleccion y el costo historico del plan todavia
+      # conserva las consultas que no ejecuta la via de spool.
       spool_plan <- attr(plan, "materializacion", exact = TRUE)
       expect_true(is.list(spool_plan))
       expect_identical(spool_plan$seleccion_unica, 1L)
@@ -200,14 +209,16 @@ test_that("el SQL mantiene una fila por campo y publica el lote compartido", {
 test_that("un lote rechazado degrada a columnas sin perder las sanas", {
   bases <- .conexion_consolidacion_dbi("muchas_expresiones")
   on.exit(DBI::dbDisconnect(bases$cruda), add = TRUE)
-  resultado <- .perfilar_consolidacion_dbi(
+  resultado <- .perfilar_consolidacion_con_aviso(
     bases$conexion, universo = "tabla_completa", estrategia_mediana = "exacta",
     muestra = 5L
   )
   registros <- resultado$resumen_tabla$sql
   medidos <- registros[registros$columna %in% c("a", "b", "c", "d") &
     registros$metrica != "n", , drop = FALSE]
-  expect_true(all(medidos$estado == "calculado"))
+  # Ninguna de estas columnas repite un valor: no tienen moda.
+  expect_true(all(medidos$estado[medidos$metrica != "moda"] == "calculado"))
+  expect_true(all(medidos$estado[medidos$metrica == "moda"] == "no_aplica"))
   expect_true(any(.consolidacion_dbi$rechazos == "muchas expresiones"))
   expect_true(any(registros$columnas_compartidas == 1L, na.rm = TRUE))
   reintentos <- medidos[!is.na(medidos$consulta_id), , drop = FALSE]
@@ -224,7 +235,7 @@ test_that("un agregado rechazado para una columna conserva las demas del lote", 
   )
   bases <- .conexion_consolidacion_dbi("tipo_malo", datos)
   on.exit(DBI::dbDisconnect(bases$cruda), add = TRUE)
-  resultado <- .perfilar_consolidacion_dbi(
+  resultado <- .perfilar_consolidacion_con_aviso(
     bases$conexion, universo = "tabla_completa", estrategia_mediana = "exacta",
     muestra = 5L
   )
@@ -233,7 +244,8 @@ test_that("un agregado rechazado para una columna conserva las demas del lote", 
     registros$metrica != "n", , drop = FALSE]
   mala <- registros[registros$columna == "mala" & registros$metrica != "n", ,
                     drop = FALSE]
-  expect_true(all(sanas$estado == "calculado"))
+  expect_true(all(sanas$estado[sanas$metrica != "moda"] == "calculado"))
+  expect_true(all(sanas$estado[sanas$metrica == "moda"] == "no_aplica"))
   expect_true(all(mala$estado == "no_disponible"))
   expect_true(any(.consolidacion_dbi$rechazos == "tipo malo lote"))
   expect_true(any(grepl("mala|agregado|tipo", mala$motivo, ignore.case = TRUE)))
@@ -289,7 +301,7 @@ test_that("la biseccion reduce el descarte de agregados y publica su lote", {
     )
     names(datos) <- nombres
     bases <- .conexion_consolidacion_dbi("tipo_malo", datos)
-    resultado <- .perfilar_consolidacion_dbi(
+    resultado <- .perfilar_consolidacion_con_aviso(
       bases$conexion, universo = "tabla_completa",
       metricas = c("validos", "basicos", "desvio"),
       estrategia_mediana = "exacta", muestra = 5L,
@@ -355,7 +367,7 @@ test_that("el rango del plan incluye el costo de una biseccion rechazada", {
     bloque_muestra = "solo_agregados", tamano_lote = 4L
   )
   .reiniciar_consolidacion_dbi("muchas_expresiones")
-  resultado <- .perfilar_consolidacion_dbi(
+  resultado <- .perfilar_consolidacion_con_aviso(
     bases$conexion, universo = "tabla_completa", estrategia_mediana = "exacta",
     muestra = 5L,
     bloque_muestra = "solo_agregados", tamano_lote = 4L

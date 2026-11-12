@@ -158,6 +158,11 @@
                             evidencia, sugerencia, n_evaluados = NA_real_,
                             n_afectados = NA_real_, unidad_conteo = NA_character_,
                             estado_reparacion = NA_character_) {
+  # Una fila por elemento de `columna` y `evidencia`: un detector que informa
+  # muchos casos del mismo tipo los arma de una vez (ver `columnas_duplicadas`
+  # en `.construir_hallazgos()`, un hallazgo por grupo). Cada fila lleva su
+  # propia traza vacia.
+  n_filas <- max(length(columna), length(evidencia), 1L)
   data.frame(
     columna = columna,
     tipo_hallazgo = tipo,
@@ -169,7 +174,7 @@
     n_afectados = as.numeric(n_afectados),
     unidad_conteo = as.character(unidad_conteo),
     estado_reparacion = as.character(estado_reparacion),
-    trazabilidad = I(list(.trazabilidad_vacia())),
+    trazabilidad = I(rep(list(.trazabilidad_vacia()), n_filas)),
     stringsAsFactors = FALSE
   )
 }
@@ -355,6 +360,7 @@
   data.frame(
     diagnostico = character(), columna = character(), motivo = character(),
     como_resolverlo = character(), dependencia = character(),
+    columnas = I(list()),
     stringsAsFactors = FALSE
   )
 }
@@ -463,13 +469,16 @@
 
 .nuevo_diagnostico_no_evaluado <- function(diagnostico, columna, motivo,
                                            como_resolverlo,
-                                           dependencia = NA_character_) {
+                                           dependencia = NA_character_,
+                                           columnas = NULL) {
+  columnas <- if (is.null(columnas)) NULL else as.character(columnas)
   data.frame(
     diagnostico = as.character(diagnostico),
     columna = as.character(columna),
     motivo = as.character(motivo),
     como_resolverlo = as.character(como_resolverlo),
     dependencia = as.character(dependencia),
+    columnas = I(list(columnas)),
     stringsAsFactors = FALSE
   )
 }
@@ -498,7 +507,8 @@
       "texto_no_descifrable", nombres[[i]],
       paste0(
         "No se pudieron analizar ", descartados, " de ", presentes,
-        " valores presentes: sus bytes no son UTF-8 v\u00e1lidos y la columna no ",
+        if (presentes == 1L) " valor presente: sus bytes no son UTF-8 v\u00e1lidos y la columna no " else
+          " valores presentes: sus bytes no son UTF-8 v\u00e1lidos y la columna no ",
         "declara su codificaci\u00f3n. Quedaron fuera de todo diagn\u00f3stico ",
         "de texto, y por eso no cuentan ni como distintos ni como faltantes."
       ),
@@ -852,17 +862,17 @@
       paste0(
         .formatear_decimal_publicado(proporcion),
         " de cumplimiento; ", length(indices_incumplen), " de ",
-        n_evaluados, " filas fuera de orden. ",
+        n_evaluados, if (n_evaluados == 1L) " fila fuera de orden. " else " filas fuera de orden. ",
         "Solapamiento intercuartil: ",
         .formatear_decimal_publicado(solapamiento), "; umbral: ",
         .formatear_decimal_publicado(umbral_solapamiento), ". ",
         "IQR de la brecha: ", .formatear_decimal_publicado(iqr_brecha),
         "; criterio alternativo: ", .formatear_decimal_publicado(0), ". ",
-        "Razon de permutacion descriptiva (observado/esperado al permutar filas): ",
+        "Raz\u00f3n de permutaci\u00f3n descriptiva (observado/esperado al permutar filas): ",
         if (is.finite(razon_permutacion)) {
           .formatear_decimal_publicado(razon_permutacion)
         } else "NA",
-        "; no filtra la deteccion. ",
+        "; no filtra la detecci\u00f3n. ",
         evidencia_ejemplos
       ),
       paste0(
@@ -877,6 +887,8 @@
     ultimo <- length(hallazgos)
     hallazgos[[ultimo]]$trazabilidad[[1L]]$posicion_columna <-
       c(primero, segundo)
+    hallazgos[[ultimo]]$trazabilidad[[1L]]$columnas <-
+      c(nombre_primero, nombre_segundo)
   }
   list(hallazgos = hallazgos, alcance = alcance)
 }
@@ -910,26 +922,55 @@
   vapply(seq_len(n), raiz, integer(1L))
 }
 
+# Recibe un vector de tokens numericos y normaliza cada uno: saca los
+# separadores de miles y los ceros de relleno. Un token que no es un entero ni
+# un numero con miles queda como esta.
 .normalizar_token_numerico_vocabulario <- function(token) {
-  if (grepl("^[0-9]{1,3}(?:[.,][0-9]{3})+$", token, perl = TRUE)) {
-    token <- gsub("[.,]", "", token)
-  } else if (!grepl("^[0-9]+$", token, perl = TRUE)) {
-    return(token)
-  }
-  token <- sub("^0+", "", token)
-  if (!nzchar(token)) "0" else token
+  token <- as.character(token)
+  miles <- grepl("^[0-9]{1,3}(?:[.,][0-9]{3})+$", token, perl = TRUE)
+  token[miles] <- gsub("[.,]", "", token[miles])
+  entero <- miles | grepl("^[0-9]+$", token, perl = TRUE)
+  token[entero] <- sub("^0+", "", token[entero])
+  token[entero & !nzchar(token)] <- "0"
+  token
 }
 
+# La firma se armaba valor por valor: un `gregexpr()` por valor y dos `grepl()`
+# por token. Sobre una columna de 500 codigos eran 0,016 s por columna (medido
+# con 300), y en Windows cada `grepl(perl = TRUE)` paga ademas un costo fijo.
+# Ahora la columna entera pasa una vez por cada expresion; la firma de cada
+# valor es la misma.
 .firmas_numericas_vocabulario <- function(textos) {
-  vapply(textos, function(texto) {
-    if (is.na(texto) || !nzchar(texto)) return("")
-    posiciones <- gregexpr("[0-9]+(?:[.,][0-9]+)*", texto, perl = TRUE)[[1L]]
-    if (posiciones[[1L]] < 0L) return("")
-    tokens <- regmatches(texto, list(posiciones))[[1L]]
-    tokens <- vapply(tokens, .normalizar_token_numerico_vocabulario,
-                     character(1L))
-    paste(tokens, collapse = "\u001f")
-  }, character(1L), USE.NAMES = FALSE)
+  firmas <- character(length(textos))
+  con_texto <- which(!is.na(textos) & nzchar(textos))
+  if (!length(con_texto)) return(firmas)
+  posiciones <- gregexpr(
+    "[0-9]+(?:[.,][0-9]+)*", textos[con_texto], perl = TRUE
+  )
+  tokens <- regmatches(textos[con_texto], posiciones)
+  n_tokens <- lengths(tokens)
+  con_numero <- which(n_tokens > 0L)
+  if (!length(con_numero)) return(firmas)
+  normalizados <- .normalizar_token_numerico_vocabulario(
+    unlist(tokens[con_numero], use.names = FALSE)
+  )
+  n_tokens <- n_tokens[con_numero]
+  unico <- n_tokens == 1L
+  salida <- character(length(con_numero))
+  # La mayoria de los valores tiene un solo numero: su firma es ese token, y
+  # solo los demas necesitan juntar sus tokens con el separador.
+  inicio <- cumsum(c(1L, n_tokens[-length(n_tokens)]))
+  salida[unico] <- normalizados[inicio[unico]]
+  if (!all(unico)) {
+    tanda <- rep.int(seq_along(n_tokens), n_tokens)
+    en_varios <- !unico[tanda]
+    partes <- split(normalizados[en_varios], tanda[en_varios])
+    salida[!unico] <- vapply(
+      partes, paste, character(1L), collapse = "\u001f", USE.NAMES = FALSE
+    )
+  }
+  firmas[con_texto[con_numero]] <- salida
+  firmas
 }
 
 # Clasifica la forma de la diferencia como evidencia, nunca como filtro. Se
@@ -1087,16 +1128,14 @@
     max_asimetria_equifrecuente, max_trabajo, n_excluidos_faltantes,
     max_largo_valor) {
   valores <- unique(textos[presentes])
-  largos_valores <- nchar(valores, type = "chars", allowNA = TRUE)
+  largos_valores <- .nchar_texto_seguro(valores)
   largos_valores <- largos_valores[is.finite(largos_valores)]
-  largos_filas <- nchar(textos[presentes], type = "chars", allowNA = TRUE)
+  largos_filas <- .nchar_texto_seguro(textos[presentes])
   largos_filas <- largos_filas[is.finite(largos_filas)]
   # La regla de proximidad trabaja sobre el VOCABULARIO -los valores distintos-,
   # asi que esa es la unidad en la que promete, y hay que medirla aparte: un
   # unico valor largo repetido en cien filas no son cien valores largos.
-  largos_valores <- nchar(
-    unique(textos[presentes]), type = "chars", allowNA = TRUE
-  )
+  largos_valores <- .nchar_texto_seguro(unique(textos[presentes]))
   largos_valores <- largos_valores[is.finite(largos_valores)]
   suma_largos <- sum(largos_valores)
   trabajo <- if (length(largos_valores)) {
@@ -1132,6 +1171,10 @@
       tamano_grupo_maximo = 0L, proporcion_grupo_maximo = 0,
       tamano_grupo_maximo_numerico = 0L,
       proporcion_grupo_maximo_numerico = 0,
+      tamano_grupo_maximo_sin_numeros = 0L,
+      proporcion_grupo_maximo_sin_numeros = 0,
+      aplicable_sin_numeros = TRUE,
+      evaluado_aparte_sin_numeros = FALSE,
       n_candidatos_distancia = 0L,
       n_candidatos_edicion_corta = 0L,
       n_descartados_frecuencia_edicion_corta = 0L,
@@ -1142,6 +1185,7 @@
       n_grupos_bajo_piso_asimetria = 0L,
       n_grupos_sin_variante_rara = 0L,
       n_pares_equifrecuentes = 0,
+      n_pares_cadenas_equifrecuentes = 0,
       max_asimetria_equifrecuente = max_asimetria_equifrecuente,
       min_participacion_dominante = min_participacion_dominante,
       n_pares_descartados_numeros = 0,
@@ -1223,7 +1267,7 @@
   )
   if (is.null(excluir)) excluir <- rep(FALSE, length(textos))
   if (!is.logical(excluir) || length(excluir) != length(textos)) {
-    .detener("`excluir` debe ser una mascara logica del largo de `x`.", call. = FALSE)
+    .detener("`excluir` debe ser una m\u00e1scara l\u00f3gica del largo de `x`.", call. = FALSE)
   }
   excluir[is.na(excluir)] <- FALSE
   presentes_originales <- !is.na(textos) & nzchar(textos)
@@ -1246,9 +1290,7 @@
   textos_comparados[presentes] <- .normalizacion_aplicar(
     textos[presentes], perfil_columna
   )
-  largos_comparados <- nchar(
-    textos_comparados[presentes], type = "chars", allowNA = TRUE
-  )
+  largos_comparados <- .nchar_texto_seguro(textos_comparados[presentes])
   largos_comparados <- largos_comparados[is.finite(largos_comparados)]
   # Un solo numero para las dos ramas. Antes, la que excluia publicaba el largo
   # comparado y la que no excluia publicaba el crudo: el mismo campo significaba
@@ -1330,7 +1372,7 @@
   n_unidades <- max(clases, 0L)
   valores_norm <- unique(normalizados)
   longitudes <- if (n_unidades) {
-    as.numeric(nchar(valores_norm, type = "chars", allowNA = TRUE))
+    as.numeric(.nchar_texto_seguro(valores_norm))
   } else numeric()
   longitudes[is.na(longitudes)] <- 0
   # La unidad es la comparacion de un caracter contra otro, que es el bucle
@@ -1351,6 +1393,22 @@
   # mas abajo.
   grupos_de_clase <- split(seq_along(clases), clases)
   representantes <- vapply(grupos_de_clase, `[[`, integer(1L), 1L)
+  # Aca conviven dos espacios de indices, y confundirlos no da error: da otra
+  # respuesta. Las FORMAS -`crudos`, `publicables`, `frecuencias`, `pares`-
+  # son los valores tal como se escribieron; las UNIDADES -`valores_norm`,
+  # `frecuencia_unidad`, `firmas_numericas` y todo lo que compara distancias-
+  # son las formas ya normalizadas, y una clase exacta (`ALFA`, `Alfa`) junta
+  # varias formas en una unidad. Sin clases exactas la unidad `k` es la forma
+  # `k` y cualquier mezcla pasa inadvertida; con una sola clase delante, cada
+  # unidad que viene despues apunta a la forma anterior. Medido: con `ALFA` y
+  # `Alfa` antes de `Montevideo`/`Montevido` el grupo equifrecuente y su fila
+  # de cobertura desaparecian, y en una columna de horas con una clase delante
+  # el filtro de formato leia otro par y publicaba 23 falsos `a.m.`/`p.m.`.
+  #
+  # La regla es una: lo que sale del espacio de unidades sale traducido a
+  # formas, como en `aristas_estrellas()`. Un par se lee por la forma
+  # representante de cada unidad, y un grupo se publica con todas las formas
+  # de sus unidades, como los grupos del camino principal.
   disponible <- .stringdist_disponible()
   firmas_numericas <- if (disponible) {
     .firmas_numericas_vocabulario(valores_norm)
@@ -1406,32 +1464,10 @@
   frecuencias_token <- .token_frecuencias_vocabulario(crudos)
   n_formas_token <- length(crudos)
   max_asimetria_equifrecuente <- as.numeric(max_asimetria_equifrecuente)
-  padre_equifrecuente <- seq_len(n_unidades)
-  rango_equifrecuente <- integer(n_unidades)
-  activos_equifrecuentes <- logical(n_unidades)
-  raiz_equifrecuente <- function(x) {
-    while (padre_equifrecuente[[x]] != x) {
-      padre_equifrecuente[[x]] <<- padre_equifrecuente[[
-        padre_equifrecuente[[x]]
-      ]]
-      x <- padre_equifrecuente[[x]]
-    }
-    x
-  }
-  unir_equifrecuentes <- function(a, b) {
-    raiz_a <- raiz_equifrecuente(a)
-    raiz_b <- raiz_equifrecuente(b)
-    if (raiz_a == raiz_b) return(invisible(NULL))
-    if (rango_equifrecuente[[raiz_a]] < rango_equifrecuente[[raiz_b]]) {
-      padre_equifrecuente[[raiz_a]] <<- raiz_b
-    } else if (rango_equifrecuente[[raiz_a]] > rango_equifrecuente[[raiz_b]]) {
-      padre_equifrecuente[[raiz_b]] <<- raiz_a
-    } else {
-      padre_equifrecuente[[raiz_b]] <<- raiz_a
-      rango_equifrecuente[[raiz_a]] <<- rango_equifrecuente[[raiz_a]] + 1L
-    }
-    invisible(NULL)
-  }
+  # Aca solo se registran los pares; los componentes se arman despues, cuando
+  # ya se sabe que publico el camino principal. Armarlos mientras se
+  # registraban unia la pareja que el camino principal forma con la que no
+  # forma, y despues ya no habia como separarlas (ver mas abajo).
   registrar_equifrecuentes <- function(fila_1, fila_2, distancia) {
     if (!length(fila_1)) return(invisible(NULL))
     frecuencias_1 <- frecuencia_unidad[fila_1]
@@ -1444,20 +1480,23 @@
     fila_1 <- fila_1[conservar]
     fila_2 <- fila_2[conservar]
     distancia <- distancia[conservar]
-    n_pares_equifrecuentes <<- n_pares_equifrecuentes + length(fila_1)
-    for (i in seq_along(fila_1)) {
-      activos_equifrecuentes[[fila_1[[i]]]] <<- TRUE
-      activos_equifrecuentes[[fila_2[[i]]]] <<- TRUE
-      unir_equifrecuentes(fila_1[[i]], fila_2[[i]])
-    }
+    # Se guardan en formas: los grupos que los consumen estan en formas, y
+    # de aca solo se leen para publicar (`crudos`) y para aparear contra
+    # esos grupos. Los extremos se guardan tambien con el detector apagado,
+    # porque la fila de cobertura cuenta los pares de los grupos que declara
+    # y no todos los que se registraron; la distancia solo se publica con el
+    # detector encendido.
+    pares_equifrecuentes_1 <<- c(
+      pares_equifrecuentes_1, as.integer(representantes[fila_1])
+    )
+    pares_equifrecuentes_2 <<- c(
+      pares_equifrecuentes_2, as.integer(representantes[fila_2])
+    )
     if (isTRUE(detectar_variantes_equifrecuentes)) {
-      pares_equifrecuentes_1 <<- c(pares_equifrecuentes_1, fila_1)
-      pares_equifrecuentes_2 <<- c(pares_equifrecuentes_2, fila_2)
       distancias_equifrecuentes <<- c(distancias_equifrecuentes, distancia)
     }
     invisible(NULL)
   }
-  n_pares_equifrecuentes <- 0L
   pares_equifrecuentes_1 <- integer()
   pares_equifrecuentes_2 <- integer()
   distancias_equifrecuentes <- numeric()
@@ -1488,29 +1527,55 @@
         empate_mejor_hub
       }
       origenes <- if (sin_filtro) mejor_origen_sin_filtro else mejor_origen
-      for (i in seq_along(fila_1)) {
-        primero <- as.integer(fila_1[[i]])
-        segundo <- as.integer(fila_2[[i]])
-        if (frecuencia_unidad[[primero]] == frecuencia_unidad[[segundo]]) {
-          next
+      # Cada par une la forma menos frecuente (`bajo`) con la mas frecuente
+      # (`alto`), y cada `bajo` se queda con el `alto` de frecuencia maxima; si
+      # dos lo alcanzan, queda empatado. Se hacia par por par en un bucle de R,
+      # y una columna de 500 codigos entrega unos 77.000 pares cercanos: medido
+      # sobre 300 columnas, 0,03 s por columna, un tercio del detector.
+      #
+      # El resultado del bucle no depende del orden salvo en un punto, y se
+      # conserva: si un `bajo` alcanza un maximo nuevo, el centro, la distancia
+      # y el origen son los del PRIMER par que lo alcanza en el orden de
+      # llegada, y queda empatado si otro par mas llega al mismo maximo. Si el
+      # maximo de la tanda solo iguala al que ya tenia, queda empatado y el
+      # centro anterior no cambia; si es menor, no cambia nada. El orden
+      # `radix` es estable y por eso respeta el de llegada dentro de cada
+      # `bajo`.
+      primero <- as.integer(fila_1)
+      segundo <- as.integer(fila_2)
+      frecuencia_primero <- frecuencia_unidad[primero]
+      frecuencia_segundo <- frecuencia_unidad[segundo]
+      utiles <- which(frecuencia_primero != frecuencia_segundo)
+      if (length(utiles)) {
+        primero_es_bajo <- frecuencia_primero[utiles] <
+          frecuencia_segundo[utiles]
+        bajo <- ifelse(primero_es_bajo, primero[utiles], segundo[utiles])
+        alto <- ifelse(primero_es_bajo, segundo[utiles], primero[utiles])
+        frecuencia_alta <- frecuencia_unidad[alto]
+        distancia_util <- distancia[utiles]
+        orden <- .orden_por_bytes(bajo, -frecuencia_alta)
+        bajo_ordenado <- bajo[orden]
+        alta_ordenada <- frecuencia_alta[orden]
+        abre <- !duplicated(bajo_ordenado)
+        tramo <- cumsum(abre)
+        nodos <- bajo_ordenado[abre]
+        maximos <- alta_ordenada[abre]
+        ganador <- orden[abre]
+        n_en_maximo <- tabulate(
+          tramo[alta_ordenada == maximos[tramo]], nbins = length(nodos)
+        )
+        previa <- frecuencia[nodos]
+        mejora <- maximos > previa
+        iguala <- maximos == previa
+        if (any(mejora)) {
+          destino <- nodos[mejora]
+          frecuencia[destino] <- maximos[mejora]
+          hub[destino] <- alto[ganador[mejora]]
+          distancias[destino] <- distancia_util[ganador[mejora]]
+          origenes[destino] <- origen
+          empates[destino] <- n_en_maximo[mejora] > 1L
         }
-        if (frecuencia_unidad[[primero]] < frecuencia_unidad[[segundo]]) {
-          bajo <- primero
-          alto <- segundo
-        } else {
-          bajo <- segundo
-          alto <- primero
-        }
-        frecuencia_alta <- frecuencia_unidad[[alto]]
-        if (frecuencia_alta > frecuencia[[bajo]]) {
-          frecuencia[[bajo]] <- frecuencia_alta
-          hub[[bajo]] <- alto
-          distancias[[bajo]] <- distancia[[i]]
-          origenes[[bajo]] <- origen
-          empates[[bajo]] <- FALSE
-        } else if (frecuencia_alta == frecuencia[[bajo]]) {
-          empates[[bajo]] <- TRUE
-        }
+        if (any(iguala)) empates[nodos[iguala]] <- TRUE
       }
       if (sin_filtro) {
         mejor_frecuencia_sin_filtro <<- frecuencia
@@ -1569,9 +1634,14 @@
       fila_1 <- fila_1[compatibles]
       fila_2 <- fila_2[compatibles]
       distancia <- distancia[compatibles]
+      # El filtro mira los tokens de las formas escritas -`frecuencias_token`
+      # cuenta por forma- y el par llega en unidades: se lee la forma
+      # representante de cada una, la misma que el grupo publica.
+      forma_1 <- representantes[fila_1]
+      forma_2 <- representantes[fila_2]
       del_formato <- vapply(seq_along(fila_1), function(k) {
         .diferencia_sistematica_vocabulario(
-          crudos[[fila_1[[k]]]], crudos[[fila_2[[k]]]],
+          crudos[[forma_1[[k]]]], crudos[[forma_2[[k]]]],
           frecuencias_token, n_formas_token
         )
       }, logical(1L))
@@ -1589,14 +1659,15 @@
     .comparar_bloques_duplicados(
       valores_norm[seq_len(max_unidades)], seq_len(max_unidades),
       metodo, umbral, bloque = min(1000L, max_unidades), max_resultados = 1L,
-      on_pairs = registrar_candidatos, nucleos = nucleos, p = p
+      on_pairs = registrar_candidatos, nucleos = nucleos, p = p,
+      solo_pares = TRUE
     )
     # Con el umbral Jaro--Winkler vigente, una sustitucion entra siempre desde
     # siete caracteres. La ruta de edicion cubre la zona ciega hasta seis.
     max_largo_edicion_corta <- 6L
     indices_cortos <- which(
       seq_len(n_unidades) <= max_unidades &
-        nchar(valores_norm, type = "chars", allowNA = TRUE) <=
+        .nchar_texto_seguro(valores_norm) <=
           max_largo_edicion_corta
     )
     if (length(indices_cortos) > 1L) {
@@ -1608,7 +1679,7 @@
           registrar_candidatos(
             fila_1, fila_2, distancia, edicion_corta = TRUE
           )
-        }, nucleos = nucleos, p = p
+        }, nucleos = nucleos, p = p, solo_pares = TRUE
       )
     }
     aristas_estrellas <- function(mejor_hub, mejor_distancia,
@@ -1693,7 +1764,45 @@
   # el diagnostico de distancia esta disponible y puede haber encadenamiento.
   aplicable <- !limite_aplicado || !disponible ||
     proporcion_grupo_maximo <= max_proporcion_grupo
-  if (!aplicable) grupos <- list()
+  # Ese limite mide el componente previo al filtro numerico, y es lo que una
+  # familia numerada necesita: `Zona 01` ... `Zona 15` con frecuencias
+  # desparejas forman un componente antes del filtro, el filtro los separa, y
+  # medido despues la familia pasaria en pedazos. Pero el mismo componente
+  # decidia tambien sobre los grupos SIN numeros de la columna, y a esos el
+  # filtro nunca los une con una forma que tenga numeros: una arista de
+  # distancia solo sobrevive entre firmas numericas iguales, y la de un texto
+  # sin digitos es vacia. Medido: 40 codigos `valor_n` desparejos junto a
+  # `Montevideo` (90) y `Montevido` (4) abarcaban 0,930 del vocabulario, la
+  # columna quedaba "no aplica" y la errata, que sola se publica, no salia.
+  #
+  # Por eso el limite de la columna decide sobre los grupos con numeros, y un
+  # grupo sin numeros se juzga ademas con el mismo limite medido sobre los
+  # grupos sin numeros, con el mismo vocabulario de denominador: lo que la
+  # columna diria si la familia numerada no se encadenara. Solo rescata, nunca
+  # suprime: si el limite de la columna admite, todo sale como antes, y una
+  # cadena sin numeros que sola no aplica tampoco aplica aca.
+  con_numeros_unidad <- nzchar(firmas_numericas)
+  grupo_con_numeros <- vapply(grupos, function(indices) {
+    any(con_numeros_unidad[clases[indices]])
+  }, logical(1L))
+  tamano_grupo_maximo_sin_numeros <- if (any(!grupo_con_numeros)) {
+    max(lengths(grupos[!grupo_con_numeros]))
+  } else 0L
+  proporcion_grupo_maximo_sin_numeros <- if (n_evaluados) {
+    tamano_grupo_maximo_sin_numeros / n_evaluados
+  } else 0
+  aplicable_sin_numeros <- !disponible ||
+    !(n_evaluados >= min_valores_limite ||
+        tamano_grupo_maximo_sin_numeros >= min_tamano_grupo_limite) ||
+    proporcion_grupo_maximo_sin_numeros <= max_proporcion_grupo
+  admitido_por_limite <- function(con_numeros) {
+    aplicable | (!con_numeros & aplicable_sin_numeros)
+  }
+  if (!aplicable) grupos <- grupos[admitido_por_limite(grupo_con_numeros)]
+  # Se declara si hubo algo sin numeros que juzgar aparte: sin eso, el motivo
+  # de "no aplica" no puede decir a que parte de la columna se refiere.
+  evaluado_aparte_sin_numeros <- !aplicable && length(grupos) > 0L
+  grupos_publicados <- list()
   if (!length(grupos)) {
     grupos_salida <- list()
   } else {
@@ -1801,6 +1910,7 @@
     }, logical(1L))
     n_grupos_bajo_piso <- sum(!conserva)
     grupos_salida <- grupos_salida[conserva]
+    grupos_publicados <- grupos[conserva]
   }
   if (length(grupos_salida)) {
     orden <- .orden_por_bytes(-vapply(grupos_salida, `[[`, numeric(1L), "asimetria"),
@@ -1808,33 +1918,148 @@
     grupos_salida <- grupos_salida[orden]
   }
   if (!exists("n_grupos_bajo_piso", inherits = FALSE)) n_grupos_bajo_piso <- 0L
-  componentes_equifrecuentes <- if (n_unidades) {
-    vapply(seq_len(n_unidades), raiz_equifrecuente, integer(1L))
-  } else integer()
-  grupos_equifrecuentes_candidatos <- if (length(activos_equifrecuentes)) {
-    candidatos <- split(
-      which(activos_equifrecuentes),
-      componentes_equifrecuentes[activos_equifrecuentes]
-    )
-    Filter(function(indices) {
-      frecuencias_grupo <- frecuencias[indices]
+  # Cada par cercano se declara una sola vez, y lo que se decide es el PAR, no
+  # el grupo: un par esta declarado si el camino principal publico sus dos
+  # extremos en un mismo grupo, y de los demas sale todo lo que esta via
+  # publica -los grupos que cuenta N, los pares que cuenta M, la asimetria y
+  # las distancias de cada grupo-. Una sola definicion para las tres cosas.
+  #
+  # Antes se decidia por candidato entero: se descartaba solo si todas sus
+  # formas estaban en un mismo grupo publicado. Con una tercera forma colgando
+  # de la pareja publicada el candidato ya no cabia entero y se contaba con la
+  # pareja adentro. Medido: `Montevideo` (100), `Montevido` (50) y
+  # `Montividoo` (50) publicaban [Montevideo / Montevido] y, en la misma
+  # salida, "1 grupo de formas cercanas no se formo... 2 pares", que contaba
+  # esa misma pareja; con el detector encendido salia otra vez dentro de
+  # [Montevideo / Montevido / Montividoo]. Y al reves: si la pareja publicada
+  # empujaba la asimetria del candidato por encima del tope, el par que
+  # quedaba suelto no se declaraba en ningun lado.
+  #
+  # La forma que comparten el grupo publicado y el par que no lo esta se
+  # nombra en los dos, como ya pasa con una clase exacta empatada con su
+  # vecina: el camino principal publica la clase y esta via la pareja, con las
+  # grafias de la clase. Sacar la forma compartida dejaria al par sin uno de
+  # sus extremos, o sea sin declarar.
+  #
+  # `grupos_publicados` es posterior al piso y al limite, asi que lo que el
+  # piso deja afuera no esta ahi y se sigue contando: esta via cubre
+  # justamente eso. Descartar por tocar una clase, en cambio, callaba la
+  # pareja empatada: sin centro de frecuencia no hay arista, el camino
+  # principal publica solo la clase, y la pareja no salia ni en la fila de
+  # cobertura ni, con el detector encendido, como hallazgo. Y en el borde del
+  # piso (`Montevideo` (50) contra `Montevido` (25) da 2, que llega al piso
+  # sin pasar el tope) la pareja esta publicada y no se cuenta.
+  grupo_publicado_forma <- integer(n_evaluados)
+  for (k in seq_along(grupos_publicados)) {
+    grupo_publicado_forma[grupos_publicados[[k]]] <- k
+  }
+  grupo_extremo_1 <- grupo_publicado_forma[pares_equifrecuentes_1]
+  grupo_extremo_2 <- grupo_publicado_forma[pares_equifrecuentes_2]
+  par_sin_declarar <- !(grupo_extremo_1 > 0L &
+                          grupo_extremo_1 == grupo_extremo_2)
+  # Los componentes se arman sobre unidades, y el candidato sale en formas:
+  # cada forma va al componente de su unidad, igual que los grupos del
+  # camino principal salen de `split(seq_len(n_evaluados), componentes)`.
+  # Los pares se recorren en el orden en que se registraron, asi que sin
+  # pares declarados los componentes -y el orden de los grupos- son los de
+  # siempre. Y un par publicado tampoco une componentes: dos empates que solo
+  # se tocan por una pareja que el camino principal ya formo son dos grupos
+  # que no se formaron, no uno con la pareja adentro.
+  unidad_extremo_1 <- clases[pares_equifrecuentes_1]
+  unidad_extremo_2 <- clases[pares_equifrecuentes_2]
+  unidad_activa <- logical(n_unidades)
+  unidad_activa[c(unidad_extremo_1[par_sin_declarar],
+                  unidad_extremo_2[par_sin_declarar])] <- TRUE
+  componentes_equifrecuentes <- .unir_componentes_vocabulario(
+    n_unidades,
+    cbind(unidad_extremo_1, unidad_extremo_2)[par_sin_declarar, , drop = FALSE]
+  )
+  cadenas_sobre_el_tope <- list()
+  grupos_equifrecuentes_candidatos <- if (length(unidad_activa)) {
+    # Las variantes que se publican y sus frecuencias son de formas. La
+    # asimetria no: es de unidades, la misma con que `registrar_equifrecuentes()`
+    # admitio cada par. Por forma, una clase exacta reparte su unidad entre
+    # grafias, y `MONTEVIDEO` (10) + `Montevideo` (40) contra `Montevido` (50),
+    # que es un empate, daba 5 y el candidato se perdia.
+    componente_forma <- componentes_equifrecuentes[clases]
+    activa_forma <- unidad_activa[clases]
+    candidatos <- split(which(activa_forma), componente_forma[activa_forma])
+    dentro_del_tope <- function(indices) {
+      frecuencias_unidades <- frecuencia_unidad[unique(clases[indices])]
       length(indices) > 1L &&
-        !any(indices %in% as.integer(pares)) &&
-        max(frecuencias_grupo) / min(frecuencias_grupo) <=
+        max(frecuencias_unidades) / min(frecuencias_unidades) <=
           max_asimetria_equifrecuente
-    }, candidatos)
+    }
+    # Lo que el tope deja afuera tambien se declara: cada par esta dentro del
+    # tope, pero la cadena que forman lo pasa de punta a punta -25, 20 y 10
+    # con tope 2- y no se agrupa. Sin declararlos, esos pares no salian en
+    # ningun lado.
+    cadenas_sobre_el_tope <- Filter(Negate(dentro_del_tope), candidatos)
+    Filter(dentro_del_tope, candidatos)
   } else list()
+  # La misma regla del limite, y no una segunda: las aristas equifrecuentes se
+  # registran despues del filtro numerico, asi que un candidato tampoco mezcla
+  # formas con y sin numeros. Sus indices son de formas, como los de `grupos`.
+  if (!aplicable && length(grupos_equifrecuentes_candidatos)) {
+    grupos_equifrecuentes_candidatos <- grupos_equifrecuentes_candidatos[
+      admitido_por_limite(vapply(
+        grupos_equifrecuentes_candidatos,
+        function(indices) any(con_numeros_unidad[clases[indices]]), logical(1L)
+      ))
+    ]
+    evaluado_aparte_sin_numeros <- evaluado_aparte_sin_numeros ||
+      length(grupos_equifrecuentes_candidatos) > 0L
+  }
+  # Una cadena fuera del limite ya la declara la fila de "no aplica" de la
+  # columna; se cuentan las que el limite admite, con la misma regla.
+  if (!aplicable && length(cadenas_sobre_el_tope)) {
+    cadenas_sobre_el_tope <- cadenas_sobre_el_tope[
+      admitido_por_limite(vapply(
+        cadenas_sobre_el_tope,
+        function(indices) any(con_numeros_unidad[clases[indices]]), logical(1L)
+      ))
+    ]
+  }
+  # La fila de cobertura dice "N grupos de formas cercanas no se formaron...
+  # Se identificaron M pares", y M se lee como los pares de esos N grupos. Se
+  # cuentan entonces solo los pares sin declarar con los dos extremos en un
+  # candidato que quedo contado: no los que el camino principal ya publico
+  # -aunque el candidato toque ese grupo por otra forma, sus dos extremos
+  # pueden caer adentro-, ni los de una cadena que el filtro de asimetria o
+  # el limite dejaron afuera. Medido: con la estrella `Zona A`..`Zona O`
+  # publicada, sus hojas empatadas sumaban 91 de los 507 pares que se
+  # atribuian a otros dos grupos.
+  formas_contadas <- unlist(grupos_equifrecuentes_candidatos, use.names = FALSE)
+  n_pares_equifrecuentes <- sum(
+    par_sin_declarar &
+      pares_equifrecuentes_1 %in% formas_contadas &
+      pares_equifrecuentes_2 %in% formas_contadas
+  )
+  # Los pares de las cadenas, contados con la misma definicion: sin declarar
+  # por el camino principal y con los dos extremos en una cadena. Una cadena
+  # es otro componente que los candidatos contados, asi que ningun par entra
+  # en las dos cuentas.
+  formas_en_cadenas <- unlist(cadenas_sobre_el_tope, use.names = FALSE)
+  n_pares_cadenas_equifrecuentes <- sum(
+    par_sin_declarar &
+      pares_equifrecuentes_1 %in% formas_en_cadenas &
+      pares_equifrecuentes_2 %in% formas_en_cadenas
+  )
   grupos_equifrecuentes <- list()
   if (isTRUE(detectar_variantes_equifrecuentes) &&
-      length(grupos_equifrecuentes_candidatos) && aplicable) {
+      length(grupos_equifrecuentes_candidatos)) {
     grupos_equifrecuentes <- lapply(
       grupos_equifrecuentes_candidatos,
       function(indices) {
         aristas <- which(
-          pares_equifrecuentes_1 %in% indices &
+          par_sin_declarar &
+            pares_equifrecuentes_1 %in% indices &
             pares_equifrecuentes_2 %in% indices
         )
         frecuencias_grupo <- frecuencias[indices]
+        # La asimetria que se publica es la que el criterio acoto: la
+        # evidencia la declara junto a `max_asimetria_equifrecuente`.
+        frecuencias_unidades <- frecuencia_unidad[unique(clases[indices])]
         distancias_grupo <- distancias_equifrecuentes[aristas]
         clases_aristas <- vapply(aristas, function(j) {
           .clase_diferencia_vocabulario(
@@ -1852,7 +2077,7 @@
           } else "mixta"
         list(
           variantes = crudos[indices], variantes_publicables = publicables[indices], frecuencias = frecuencias_grupo,
-          asimetria = max(frecuencias_grupo) / min(frecuencias_grupo),
+          asimetria = max(frecuencias_unidades) / min(frecuencias_unidades),
           distancia_minima = if (length(distancias_grupo)) {
             min(distancias_grupo)
           } else NA_real_,
@@ -1898,7 +2123,7 @@
       motivo_presupuesto = motivo_presupuesto,
       distancia_disponible = disponible,
       motivo_distancia = if (disponible) "" else
-        "No se calculo la distancia: falta el paquete opcional 'stringdist'.",
+        "No se calcul\u00f3 la distancia: falta el paquete opcional 'stringdist'.",
       metodo = metodo, p = p, umbral = umbral,
       max_valores = max_valores, max_pares = max_pares,
       max_proporcion_grupo = max_proporcion_grupo,
@@ -1909,6 +2134,10 @@
       proporcion_grupo_maximo = proporcion_grupo_maximo,
       tamano_grupo_maximo_numerico = tamano_grupo_maximo_numerico,
       proporcion_grupo_maximo_numerico = proporcion_grupo_maximo_numerico,
+      tamano_grupo_maximo_sin_numeros = tamano_grupo_maximo_sin_numeros,
+      proporcion_grupo_maximo_sin_numeros = proporcion_grupo_maximo_sin_numeros,
+      aplicable_sin_numeros = aplicable_sin_numeros,
+      evaluado_aparte_sin_numeros = evaluado_aparte_sin_numeros,
       n_candidatos_distancia = n_candidatos_distancia,
       n_candidatos_edicion_corta = n_candidatos_edicion_corta,
       n_descartados_frecuencia_edicion_corta =
@@ -1923,6 +2152,7 @@
         length(grupos_equifrecuentes_candidatos)
       ),
       n_pares_equifrecuentes = as.numeric(n_pares_equifrecuentes),
+      n_pares_cadenas_equifrecuentes = as.numeric(n_pares_cadenas_equifrecuentes),
       max_asimetria_equifrecuente = max_asimetria_equifrecuente,
       min_participacion_dominante = min_participacion_dominante,
       n_pares_descartados_numeros = n_pares_descartados_numeros,
@@ -1977,57 +2207,67 @@
       cobertura[[length(cobertura) + 1L]] <- .nuevo_diagnostico_no_evaluado(
         "proximidad_vocabulario", columnas[[i]],
         paste0(
-          "No se evaluo la proximidad del vocabulario: ",
-          alcance$n_valores_largos, " valor(es) distinto(s) en ",
+          "No se evalu\u00f3 la proximidad del vocabulario: ",
+          alcance$n_valores_largos,
+          if (alcance$n_valores_largos == 1L) " valor distinto en " else " valores distintos en ",
           alcance$n_filas_largas,
-          " fila(s) superan `max_largo_valor_vocabulario = ",
-          alcance$max_largo_valor, "` caracteres; el largo maximo observado es ",
+          if (alcance$n_filas_largas == 1L) " fila supera `max_largo_valor_vocabulario = " else
+            " filas superan `max_largo_valor_vocabulario = ",
+          alcance$max_largo_valor, "` caracteres; el largo m\u00e1ximo observado es ",
           alcance$largo_maximo,
-          ". La columna completa quedo fuera de la comparacion para no usar",
-          " una distancia de edicion que no discrimina bien textos largos."
+          ". La columna completa qued\u00f3 fuera de la comparaci\u00f3n para no usar",
+          " una distancia de edici\u00f3n que no discrimina bien textos largos."
         ),
         paste0(
           "Subir `max_largo_valor_vocabulario` si la columna contiene valores",
-          " que deben compararse, o usar `Inf` explicitamente para recuperar",
+          " que deben compararse, o usar `Inf` expl\u00edcitamente para recuperar",
           " el comportamiento anterior sin tope."
-        )
+        ),
+        dependencia = "texto_largo_no_evaluado",
+        columnas = columnas[[i]]
       )
       next
     }
-    if (isTRUE(alcance$truncado)) {
+    # Sin `stringdist` no se compara ningun par, y el recorte por presupuesto es
+    # un efecto de eso: la fila decia "se comparo entre si a las 0 primeras" y
+    # recomendaba subir `max_trabajo_vocabulario`, que no arregla nada. La fila
+    # de la dependencia que falta, de arriba, ya dice lo que hay que hacer.
+    if (isTRUE(alcance$truncado) && isTRUE(alcance$distancia_disponible)) {
       cobertura[[length(cobertura) + 1L]] <- .nuevo_diagnostico_no_evaluado(
         "proximidad_vocabulario", columnas[[i]],
         # "Unidades" nombraba dos cosas distintas en la misma frase -formas
         # normalizadas y unidades de trabajo-, y quedaban una al lado de la
         # otra. Las formas se llaman formas.
         paste0(
-          "El vocabulario excede el alcance de comparacion: se evaluaron ",
+          "El vocabulario excede el alcance de comparaci\u00f3n: se evaluaron ",
           .miles_trabajo(alcance$n_valores_evaluados), " de ",
           .miles_trabajo(alcance$n_valores_distintos),
-          " valores distintos, que son ",
+          if (alcance$n_valores_distintos == 1L) " valor distinto, que es " else " valores distintos, que son ",
           .miles_trabajo(alcance$n_unidades_normalizadas),
-          " formas normalizadas, y se comparo entre si a las ",
+          if (alcance$n_unidades_normalizadas == 1L) " forma normalizada, y se compar\u00f3 entre s\u00ed a la " else " formas normalizadas, y se compar\u00f3 entre s\u00ed a las ",
           .miles_trabajo(alcance$n_unidades_comparadas),
-          " primeras en orden alfabetico. Eso son ",
+          if (alcance$n_unidades_comparadas == 1L) " primera en orden alfab\u00e9tico. Eso es " else " primeras en orden alfab\u00e9tico. Eso son ",
           .miles_trabajo(alcance$n_pares_comparados), " de ",
-          .miles_trabajo(alcance$n_pares_posibles), " pares posibles y ",
+          .miles_trabajo(alcance$n_pares_posibles),
+          if (alcance$n_pares_posibles == 1L) " par posible y " else " pares posibles y ",
           .miles_trabajo(alcance$trabajo_comparado), " de ",
           .miles_trabajo(alcance$trabajo_estimado),
           " ", alcance$unidad_trabajo, ". Quedaron ",
-          .miles_trabajo(alcance$n_unidades_sin_comparar), " formas y ",
+          .miles_trabajo(alcance$n_unidades_sin_comparar),
+          if (alcance$n_unidades_sin_comparar == 1L) " forma y " else " formas y ",
           .miles_trabajo(alcance$n_pares_sin_comparar),
-          " pares sin comparar por ", alcance$motivo_presupuesto, "."
+          if (alcance$n_pares_sin_comparar == 1L) " par sin comparar por " else " pares sin comparar por ", alcance$motivo_presupuesto, "."
         ),
         # Decir cuantas formas quedaron afuera sin decir cuales son deja
         # suponer que se comparo una muestra. No lo es: el corte toma un tramo
         # del alfabeto, asi que lo que queda afuera son las formas que empiezan
         # mas adelante, no un subconjunto cualquiera.
         paste0(
-          "Aumentar `max_trabajo_vocabulario` si se necesita cubrir mas valores; ",
-          "el limite interno de pares no es un argumento de `perfilar()`. Tambien ",
+          "Aumentar `max_trabajo_vocabulario` si se necesita cubrir m\u00e1s valores; ",
+          "el l\u00edmite interno de pares no es un argumento de `perfilar()`. Tambi\u00e9n ",
           "se puede dividir el vocabulario en ",
-          "subconjuntos con significado comun. Las formas comparadas son las ",
-          "primeras en orden alfabetico, no una muestra: lo que queda afuera es ",
+          "subconjuntos con significado com\u00fan. Las formas comparadas son las ",
+          "primeras en orden alfab\u00e9tico, no una muestra: lo que queda afuera es ",
           "el tramo final del alfabeto. El resultado no depende del orden de ",
           "las filas."
         )
@@ -2044,12 +2284,12 @@
         paste0(
           alcance$n_grupos_bajo_piso_asimetria,
           if (alcance$n_grupos_bajo_piso_asimetria == 1L) {
-            " grupo de valores cercanos no se informo"
+            " grupo de valores cercanos no se inform\u00f3"
           } else " grupos de valores cercanos no se informaron",
-          " porque su asimetria de frecuencias quedo por debajo de ",
+          " porque su asimetr\u00eda de frecuencias qued\u00f3 por debajo de ",
           .formatear_numero_publicado(alcance$min_asimetria_general),
           ": las formas son casi igual de comunes y no se puede distinguir una",
-          " errata sistematica de dos valores legitimamente parecidos."
+          " errata sistem\u00e1tica de dos valores leg\u00edtimamente parecidos."
         ),
         paste0(
           "Bajar `min_asimetria_vocabulario` si en esta columna interesan las",
@@ -2057,27 +2297,69 @@
         )
       )
     }
-    if (isTRUE(alcance$n_grupos_sin_variante_rara > 0L) &&
-        isTRUE(alcance$aplicable)) {
+    # Con la columna fuera del limite, los candidatos que quedan son los sin
+    # numeros que se juzgaron aparte; los demas ya no se cuentan. Las cadenas
+    # que pasan el tope de punta a punta van en la misma fila, en una
+    # clausula aparte, y la fila sale tambien si son lo unico que hay: cada
+    # par cercano se declara en algun lado.
+    n_pares_cadenas <- alcance$n_pares_cadenas_equifrecuentes
+    hay_cadenas <- isTRUE(n_pares_cadenas > 0)
+    hay_sin_variante_rara <- isTRUE(alcance$n_grupos_sin_variante_rara > 0L) &&
+      (isTRUE(alcance$aplicable) ||
+         isTRUE(alcance$evaluado_aparte_sin_numeros))
+    if (hay_sin_variante_rara || hay_cadenas) {
+      tope_equifrecuente <- formatC(
+        alcance$max_asimetria_equifrecuente, format = "f", digits = 1
+      )
       nueva_cobertura <- .nuevo_diagnostico_no_evaluado(
         "proximidad_vocabulario", columnas[[i]],
         paste0(
-          alcance$n_grupos_sin_variante_rara,
-          if (alcance$n_grupos_sin_variante_rara == 1L) {
-            " grupo de formas cercanas no se formo"
-          } else " grupos de formas cercanas no se formaron",
-          " porque sus frecuencias fueron parecidas: el criterio de variante",
-          " rara no pudo distinguir una forma correcta de otra.",
-          " Se identificaron ",
-          .formatear_numero_publicado(alcance$n_pares_equifrecuentes),
-          " pares cercanos con asimetria <= ",
-          formatC(alcance$max_asimetria_equifrecuente,
-                  format = "f", digits = 1), "."
+          if (hay_sin_variante_rara) paste0(
+            alcance$n_grupos_sin_variante_rara,
+            if (alcance$n_grupos_sin_variante_rara == 1L) {
+              " grupo de formas cercanas no se form\u00f3"
+            } else " grupos de formas cercanas no se formaron",
+            " porque sus frecuencias fueron parecidas: el criterio de variante",
+            " rara no pudo distinguir una forma correcta de otra.",
+            if (alcance$n_pares_equifrecuentes == 1L) {
+              " Se identific\u00f3 "
+            } else " Se identificaron ",
+            .formatear_numero_publicado(alcance$n_pares_equifrecuentes),
+            if (alcance$n_pares_equifrecuentes == 1L) " par cercano con asimetr\u00eda <= " else " pares cercanos con asimetr\u00eda <= ",
+            tope_equifrecuente, "."
+          ),
+          if (hay_cadenas) paste0(
+            if (hay_sin_variante_rara) {
+              if (n_pares_cadenas == 1) " Otro " else " Otros "
+            } else "",
+            .formatear_numero_publicado(n_pares_cadenas),
+            if (n_pares_cadenas == 1) {
+              paste0(
+                " par cercano, con asimetr\u00eda <= ", tope_equifrecuente,
+                " entre sus formas, forma parte de una cadena"
+              )
+            } else {
+              paste0(
+                " pares cercanos, con asimetr\u00eda <= ", tope_equifrecuente,
+                " entre ellos, forman cadenas"
+              )
+            },
+            " cuya asimetr\u00eda de punta a punta supera ", tope_equifrecuente,
+            " y no se agrupan."
+          )
         ),
         paste0(
-          "Activar un detector de formas equifrecuentes con conocimiento del ",
-          "dominio, o revisar los pares manualmente; no se puede elegir una ",
-          "forma correcta solo por su frecuencia."
+          if (hay_sin_variante_rara) paste0(
+            "Activar un detector de formas equifrecuentes con conocimiento del ",
+            "dominio, o revisar los pares manualmente; no se puede elegir una ",
+            "forma correcta s\u00f3lo por su frecuencia."
+          ),
+          if (hay_sin_variante_rara && hay_cadenas) " ",
+          if (hay_cadenas) paste0(
+            "Las cadenas se pueden agrupar subiendo ",
+            "`max_asimetria_equifrecuente_vocabulario`, o revisar sus pares ",
+            "manualmente."
+          )
         )
       )
       indice_cobertura <- which(vapply(cobertura, function(x) {
@@ -2106,11 +2388,24 @@
           "El grupo candidato mayor abarca ",
           formatC(alcance$proporcion_grupo_maximo,
                   format = "f", digits = 3),
-          " del vocabulario y el diagnostico no aplica."
+          if (isTRUE(alcance$evaluado_aparte_sin_numeros)) {
+            # El motivo tiene que decir a que parte de la columna se
+            # refiere: la misma columna publica un hallazgo con los grupos
+            # sin numeros, y "no aplica" a secas lo contradiria.
+            paste0(
+              " del vocabulario y el diagn\u00f3stico no aplica a las formas",
+              " con n\u00fameros. Las formas sin n\u00fameros, que el filtro",
+              " num\u00e9rico nunca une con ellas, se evaluaron aparte: su",
+              " grupo mayor abarca ",
+              formatC(alcance$proporcion_grupo_maximo_sin_numeros,
+                      format = "f", digits = 3),
+              " del vocabulario."
+            )
+          } else " del vocabulario y el diagn\u00f3stico no aplica."
         ),
         paste0(
-          "Usar una regla de dominio especifica para la columna o ajustar ",
-          "el criterio de agrupacion con conocimiento del vocabulario."
+          "Usar una regla de dominio espec\u00edfica para la columna o ajustar ",
+          "el criterio de agrupaci\u00f3n con conocimiento del vocabulario."
         )
       )
     }
@@ -2135,7 +2430,10 @@
           variantes, " / ... ",
           .formatear_numero_publicado(
             length(grupo$variantes) - max_variantes_mostradas
-          ), " variantes no mostradas"
+            ),
+            if (length(grupo$variantes) - max_variantes_mostradas == 1L) {
+              " variante no mostrada"
+            } else " variantes no mostradas"
         )
       }
       distancia <- if (is.finite(grupo$distancia_minima)) {
@@ -2174,8 +2472,8 @@
         # la lectura a quien conoce la columna.
         paste0(
           "; ", n_escritura, " de ", length(grupo$variantes) - 1L,
-          " variantes difieren de la forma dominante solo en mayusculas, ",
-          "acentos o puntuacion (en espa\u00f1ol el acento puede cambiar la ",
+          " variantes difieren de la forma dominante s\u00f3lo en may\u00fasculas, ",
+          "acentos o puntuaci\u00f3n (en espa\u00f1ol el acento puede cambiar la ",
           "palabra: conviene mirarlas antes de unificar)"
         )
       } else ""
@@ -2189,18 +2487,20 @@
       paste(evidencia_grupos, collapse = "; ")
     } else if (!isTRUE(alcance$aplicable) &&
                isTRUE(alcance$tamano_grupo_maximo_numerico > 0L)) {
-      "No se entrega el grupo mayor: excede el limite de proporcion"
+      "No se entrega el grupo mayor: excede el l\u00edmite de proporci\u00f3n"
     } else if (isTRUE(alcance$n_pares_descartados_numeros > 0L)) {
       paste0(
         "No se formaron grupos por distancia: ",
         .formatear_numero_publicado(alcance$n_pares_descartados_numeros),
-        " pares cercanos se descartaron por secuencias numericas incompatibles"
+        if (alcance$n_pares_descartados_numeros == 1L) " par cercano se descart\u00f3 por secuencias num\u00e9ricas incompatibles" else
+          " pares cercanos se descartaron por secuencias num\u00e9ricas incompatibles"
       )
     } else if (identical(alcance$motivo_grupos, "sin_asimetria")) {
       paste0(
         "No se formaron grupos por distancia: ",
         .formatear_numero_publicado(alcance$n_candidatos_distancia),
-        " pares cercanos no tuvieron un centro de frecuencia unico"
+        if (alcance$n_candidatos_distancia == 1L) " par cercano no tuvo un centro de frecuencia \u00fanico" else
+          " pares cercanos no tuvieron un centro de frecuencia \u00fanico"
       )
     } else if (!isTRUE(alcance$distancia_disponible)) {
       alcance$motivo_distancia
@@ -2223,9 +2523,9 @@
       if (length(evidencia_grupos)) {
         descripcion_grupos
       } else if (isTRUE(alcance$n_pares_descartados_numeros > 0L)) {
-        "No se formaron grupos porque las diferencias numericas se consideran entidades distintas; revisar con una regla especifica si la columna usa otra codificacion."
+        "No se formaron grupos porque las diferencias num\u00e9ricas se consideran entidades distintas; revisar con una regla espec\u00edfica si la columna usa otra codificaci\u00f3n."
       } else if (identical(alcance$motivo_grupos, "sin_asimetria")) {
-        "No se formaron grupos por distancia porque no hubo asimetria de frecuencia; usar detectar_duplicados_aproximados() para comparar filas."
+        "No se formaron grupos por distancia porque no hubo asimetr\u00eda de frecuencia; usar detectar_duplicados_aproximados() para comparar filas."
       } else {
         descripcion_grupos
       },
@@ -2233,9 +2533,10 @@
         grupos_texto,
         "; alcance: ",
         .formatear_numero_publicado(alcance$n_valores_evaluados), " de ",
-        .formatear_numero_publicado(alcance$n_valores_distintos), " valores; ",
+        .formatear_numero_publicado(alcance$n_valores_distintos),
+        if (alcance$n_valores_distintos == 1L) " valor; " else " valores; ",
         .formatear_numero_publicado(alcance$n_pares_comparados),
-        " pares comparados de ",
+        if (alcance$n_pares_comparados == 1L) " par comparado de " else " pares comparados de ",
         .formatear_numero_publicado(alcance$n_pares_posibles),
         "; truncado=", alcance$truncado,
         "; unidades normalizadas: ",
@@ -2250,12 +2551,22 @@
         "; valores_excluidos_faltantes_disfrazados=",
         .formatear_numero_publicado(alcance$n_excluidos_faltantes_disfrazados),
         "; motivo_grupos=", alcance$motivo_grupos, ". ",
-        "pares descartados por secuencia numerica=",
+        "pares descartados por secuencia num\u00e9rica=",
         .formatear_numero_publicado(alcance$n_pares_descartados_numeros),
         "; grupo_maximo compatible=",
         .formatear_numero_publicado(alcance$tamano_grupo_maximo_numerico), " (",
         formatC(alcance$proporcion_grupo_maximo_numerico,
                 format = "f", digits = 3), "). ",
+        # Solo cuando el limite de la columna no admitio y los grupos sin
+        # numeros se juzgaron aparte: en cualquier otro caso la evidencia es
+        # la de siempre.
+        if (isTRUE(alcance$evaluado_aparte_sin_numeros)) paste0(
+          "grupo_maximo sin numeros=",
+          .formatear_numero_publicado(alcance$tamano_grupo_maximo_sin_numeros),
+          " (", formatC(alcance$proporcion_grupo_maximo_sin_numeros,
+                        format = "f", digits = 3),
+          "); las formas con n\u00fameros quedan fuera del l\u00edmite. "
+        ) else "",
         alcance$motivo_distancia,
         " criterio_edicion_corta: distancia_edicion<=",
         .formatear_numero_publicado(alcance$max_distancia_edicion_corta),
@@ -2274,7 +2585,8 @@
         .formatear_numero_publicado(alcance$n_descartados_frecuencia_edicion_corta),
         "."
       ),
-      if (isTRUE(alcance$aplicable)) {
+      if (isTRUE(alcance$aplicable) ||
+          isTRUE(alcance$evaluado_aparte_sin_numeros)) {
         if (identical(alcance$motivo_grupos, "sin_asimetria")) {
           "Usar detectar_duplicados_aproximados() para comparar filas cuando no hay una frecuencia central."
         } else {
@@ -2394,17 +2706,18 @@
       traza$n_filas_formas_dominantes <- 0L
       nuevo <- .nuevo_hallazgo(
         columnas[[i]], "variantes_equifrecuentes_vocabulario", "sospechoso",
-        "Dos formas cercanas se reparten la columna; ninguna evidencia dice cual es la correcta.",
+        "Dos formas cercanas se reparten la columna; ninguna evidencia dice cu\u00e1l es la correcta.",
         paste(
           paste(evidencia_grupos, collapse = "; "),
           "; alcance: ", alcance$n_valores_evaluados, " de ",
-          alcance$n_valores_distintos, " valores; ",
+          alcance$n_valores_distintos,
+          if (alcance$n_valores_distintos == 1L) " valor; " else " valores; ",
           length(grupos$grupos_equifrecuentes),
           " grupos; max_asimetria_equifrecuente=",
           formatC(alcance$max_asimetria_equifrecuente,
                   format = "f", digits = 1), sep = ""
         ),
-        "Revisar el dominio y declarar una forma canonica solo con evidencia externa; la frecuencia no decide entre las formas.",
+        "Revisar el dominio y declarar una forma can\u00f3nica s\u00f3lo con evidencia externa; la frecuencia no decide entre las formas.",
         alcance$n_valores_evaluados,
         sum(vapply(
           grupos$grupos_equifrecuentes, function(g) length(g$variantes),
@@ -2806,7 +3119,9 @@
       valores,
       list(tipo = tipo,
            convencion_numero_texto = .convencion_numero_texto_fila(fila)),
-      resultado$formatos
+      resultado$formatos,
+      sentinelas_numericos =
+        resultado$sentinelas_numericos_declarados %||% numeric()
     ),
     error = function(e) NULL
   )
@@ -2823,7 +3138,11 @@
   # vez de recortar, para que los indices sigan alineados con la tabla.
   sentinelas <- resultado$sentinelas_numericos_declarados %||% numeric()
   if (length(sentinelas) && identical(cuantitativos$clase, "numero")) {
-    mascara <- .mascara_sentinelas_resumen(cuantitativos$valores, sentinelas)
+    mascara <- if (!is.null(cuantitativos$mascara_sentinelas_texto)) {
+      cuantitativos$mascara_sentinelas_texto
+    } else {
+      .mascara_sentinelas_resumen(cuantitativos$valores, sentinelas)
+    }
     cuantitativos$valores[mascara] <- NA_real_
   } else if (length(sentinelas) &&
              identical(cuantitativos$clase, "integer64")) {
@@ -2955,6 +3274,15 @@
   if (identical(tipo, "posible_centinela_numerico")) {
     valor <- suppressWarnings(as.numeric(fila$centinela_valor))
     if (!length(valor) || !isTRUE(is.finite(valor))) return(NULL)
+    if (is.character(x) || is.factor(x)) {
+      texto <- .texto_analizable(x)$valores
+      convencion <- .convencion_numero_texto_fila(fila)
+      numeros <- .leer_numeros_texto(texto, convencion)
+      identidad <- .identidades_sentinelas_texto(
+        texto, valor, convencion, valores_leidos = numeros
+      )
+      return(which(!is.na(identidad)))
+    }
     numeros <- .numerico_trazable(
       .valores_cuantitativos_hallazgo(x, fila, resultado)
     )
@@ -3019,6 +3347,7 @@
   n <- length(x)
   if (!n) return(integer())
   texto <- tryCatch(.texto_analizable(x)$valores, error = function(e) NULL)
+  texto_completo <- texto
   # El universo aplicable entra ACA, antes de formar los grupos, y no despues
   # recortando el resultado. Recortar deja la traza nombrando filas que el conteo
   # no cuenta: medido, con `A`, `a` y `c` aplicables y `c`, `C` fuera del universo,
@@ -3034,6 +3363,13 @@
   if (!is.null(texto) && !is.null(aplicable) &&
       length(aplicable) == length(texto) && !all(aplicable)) {
     texto[!aplicable] <- NA
+    texto_completo[!aplicable] <- NA
+  }
+  mascara_largos <- tryCatch(resultado$texto_largo$mascara,
+                              error = function(e) NULL)
+  if (is.character(texto) && is.logical(mascara_largos) &&
+      length(mascara_largos) == length(texto) && any(mascara_largos)) {
+    texto[mascara_largos] <- NA
   }
   cuantitativos <- NULL
   cuantitativos_evaluados <- FALSE
@@ -3049,14 +3385,23 @@
   invisibles <- NULL
   obtener_invisibles <- function() {
     if (is.null(invisibles) && !is.null(texto) && is.character(texto)) {
-      vocabulario <- .vocabulario_texto(texto, .umbral_vocabulario_barato)
-      invisibles <<- .predicados_invisibles(vocabulario$valores)
-      if (isTRUE(vocabulario$usar)) {
-        invisibles <<- lapply(invisibles, function(mascara) {
-          resultado <- mascara[vocabulario$indices]
-          resultado[is.na(resultado)] <- FALSE
-          resultado
-        })
+      cache <- resultado$diagnostico_texto$cache_invisibles
+      cache_valido <- is.list(cache) &&
+        all(vapply(cache, function(mascara) {
+          is.logical(mascara) && length(mascara) == length(texto)
+        }, logical(1L)))
+      if (cache_valido) {
+        invisibles <<- cache
+      } else {
+        vocabulario <- .vocabulario_texto(texto, .umbral_vocabulario_barato)
+        invisibles <<- .predicados_invisibles(vocabulario$valores)
+        if (isTRUE(vocabulario$usar)) {
+          invisibles <<- lapply(invisibles, function(mascara) {
+            resultado <- mascara[vocabulario$indices]
+            resultado[is.na(resultado)] <- FALSE
+            resultado
+          })
+        }
       }
     }
     invisibles
@@ -3096,14 +3441,15 @@
                           error = function(e) NULL)
       if (is.null(mascara) || length(mascara) != n) NULL else which(mascara)
     },
-    espacios_sobrantes = if (is.null(texto)) NULL else
-      which(!is.na(texto) & texto != trimws(texto)),
+    espacios_sobrantes = if (is.null(texto_completo)) NULL else
+      which(!is.na(texto_completo) &
+        .celdas_texto_protegidas(texto_completo, "recortar_espacios")),
     controles_invisibles = {
       invisibles <- obtener_invisibles()
       if (is.null(invisibles)) NULL else which(invisibles$control)
     },
     entidades_html = if (is.null(texto)) NULL else
-      which(.entidades_html_en_texto(texto)),
+      which(.celdas_texto_protegidas(texto, "decodificar_entidades_html")),
     separadores_en_campo = {
       invisibles <- obtener_invisibles()
       if (is.null(invisibles)) NULL else which(invisibles$separador)
@@ -3133,30 +3479,36 @@
       .texto_analizable(x)$posiciones, error = function(e) NULL
     ),
     codificacion_rota = if (is.null(texto)) NULL else {
-      cod <- tryCatch(.analizar_codificacion_vocabulario(texto), error = function(e) NULL)
-      if (is.null(cod) || is.null(cod$afectados)) NULL else
-        which(cod$afectados)
+      afectados_cache <- resultado$diagnostico_texto$cache_codificacion_afectados
+      if (is.logical(afectados_cache) && length(afectados_cache) == length(texto)) {
+        which(afectados_cache)
+      } else {
+        cod <- tryCatch(.analizar_codificacion_vocabulario(texto), error = function(e) NULL)
+        if (is.null(cod) || is.null(cod$afectados)) NULL else
+          which(cod$afectados)
+      }
     },
-    numero_como_texto = if (is.null(texto)) NULL else {
-      partes <- tryCatch(.componentes_numero_texto_optimizado(texto),
+    numero_como_texto = if (is.null(texto_completo)) NULL else {
+      partes <- tryCatch(.componentes_numero_texto_optimizado(texto_completo),
                          error = function(e) NULL)
       if (is.null(partes)) NULL else which(
-        !is.na(texto) & nzchar(texto) & partes$compatible & partes$especial
+        !is.na(texto_completo) & nzchar(texto_completo) & partes$compatible &
+          partes$especial
       )
     },
-    unidades_mixtas = if (is.null(texto)) NULL else {
-      partes <- tryCatch(.componentes_numero_texto_optimizado(texto),
+    unidades_mixtas = if (is.null(texto_completo)) NULL else {
+      partes <- tryCatch(.componentes_numero_texto_optimizado(texto_completo),
                          error = function(e) NULL)
       if (is.null(partes)) NULL else which(
-        !is.na(texto) & nzchar(texto) & partes$compatible &
+        !is.na(texto_completo) & nzchar(texto_completo) & partes$compatible &
           nzchar(partes$unidad)
       )
     },
-    monedas_mixtas = if (is.null(texto)) NULL else {
-      partes <- tryCatch(.componentes_numero_texto_optimizado(texto),
+    monedas_mixtas = if (is.null(texto_completo)) NULL else {
+      partes <- tryCatch(.componentes_numero_texto_optimizado(texto_completo),
                          error = function(e) NULL)
       if (is.null(partes)) NULL else which(
-        !is.na(texto) & nzchar(texto) & partes$compatible &
+        !is.na(texto_completo) & nzchar(texto_completo) & partes$compatible &
           nzchar(partes$moneda)
       )
     },
@@ -3231,7 +3583,14 @@
       }
     },
     patron_raro = .indices_patron_raro(
-      x, resultado, expandir, distinguir_mayusculas
+      if (is.character(x) || is.factor(x)) {
+        x_texto <- x
+        if (is.logical(mascara_largos) && length(mascara_largos) == length(x)) {
+          x_texto[mascara_largos] <- NA_character_
+        }
+        x_texto
+      } else x,
+      resultado, expandir, distinguir_mayusculas
     ),
     NULL
   )
@@ -3250,7 +3609,8 @@
   }
   trazabilidad_precalculada <- hallazgo$trazabilidad[[1L]]
   if (tipo %in% c(
-      "casi_duplicados_vocabulario", "variantes_equifrecuentes_vocabulario"
+      "casi_duplicados_vocabulario", "variantes_equifrecuentes_vocabulario",
+      "fecha_nacimiento_fuera_rango", "fecha_fallecimiento_fuera_rango"
     ) &&
       is.list(trazabilidad_precalculada) &&
       !identical(trazabilidad_precalculada$estado, "no_disponible")) {
@@ -3282,11 +3642,19 @@
     pares <- aproximados$pares[indices_pares[[ocurrencia]], , drop = FALSE]
     parcial <- aproximados$alcance$n_pares_comparados[[1L]] <
       aproximados$alcance$n_pares_posibles[[1L]]
-    return(.trazabilidad_indices(
+    traza <- .trazabilidad_indices(
       c(pares$fila_1[[1L]], pares$fila_2[[1L]]),
       if (parcial) "comparacion_parcial" else "comparacion_completa", limite,
       clave = clave, datos = datos
-    ))
+    )
+    columnas_traza <- aproximados$columnas
+    if (is.null(columnas_traza) || !length(columnas_traza)) {
+      columnas_traza <- .separar_nombres_columnas_historico(
+        as.character(hallazgo$columna[[1L]]), sep = ", "
+      )
+    }
+    traza$columnas <- as.character(columnas_traza)
+    return(traza)
   }
   if (tipo == "filas_duplicadas") {
     duplicadas <- .filas_duplicadas_base(datos)
@@ -3295,9 +3663,10 @@
     } else {
       which(duplicadas$adelante | duplicadas$atras)
     }
-    return(.trazabilidad_indices(
+    traza <- .trazabilidad_indices(
       indices, "completo", limite, clave = clave, datos = datos
-    ))
+    )
+    return(traza)
   }
   # La unicidad de la clave se evalua entre filas completas. Las filas con
   # ausentes tienen su hallazgo propio y no se mezclan con esta traza.
@@ -3330,9 +3699,15 @@
     ))
   }
   if (tipo == "relacion_orden_columnas") {
-    nombres_par <- strsplit(
-      as.character(hallazgo$columna[[1L]]), ",", fixed = TRUE
-    )[[1L]]
+    traza_original <- hallazgo$trazabilidad[[1L]]
+    nombres_par <- if (is.list(traza_original) &&
+                       length(traza_original$columnas) == 2L) {
+      as.character(traza_original$columnas)
+    } else {
+      .separar_nombres_columnas_historico(
+        as.character(hallazgo$columna[[1L]]), sep = ","
+      )
+    }
     if (length(nombres_par) != 2L) {
       return(.trazabilidad_vacia(limite = limite))
     }
@@ -3375,19 +3750,32 @@
     }
     comparables <- is.finite(izquierda) & is.finite(derecha)
     indices <- which(comparables & izquierda > derecha)
-    return(.trazabilidad_indices(
+    traza <- .trazabilidad_indices(
       indices, "completo", limite, clave = clave, datos = datos
-    ))
+    )
+    traza$columnas <- nombres_par
+    return(traza)
   }
   if (tipo == "relacion_aritmetica_columnas") {
     trazabilidad <- hallazgo$trazabilidad[[1L]]
-    if (is.list(trazabilidad) &&
-        !identical(trazabilidad$estado, "no_disponible")) {
-      return(.limitar_trazabilidad(
-        trazabilidad, limite = limite, clave = clave, datos = datos
-      ))
+    if (!is.list(trazabilidad)) {
+      return(.trazabilidad_vacia(limite = limite))
     }
-    return(.trazabilidad_vacia(limite = limite))
+    traza <- if (identical(trazabilidad$estado, "no_disponible")) {
+      trazabilidad
+    } else {
+      .limitar_trazabilidad(
+        trazabilidad, limite = limite, clave = clave, datos = datos
+      )
+    }
+    columnas_traza <- trazabilidad$columnas
+    if (!length(columnas_traza)) {
+      columnas_traza <- .separar_nombres_columnas_historico(
+        as.character(hallazgo$columna[[1L]]), sep = ","
+      )
+    }
+    if (length(columnas_traza)) traza$columnas <- as.character(columnas_traza)
+    return(traza)
   }
   if (tipo == "bloqueo_por_con_perdida") {
     return(.trazabilidad_vacia(
@@ -3456,7 +3844,20 @@
   posiciones <- lapply(hallazgos$trazabilidad, function(traza) {
     if (is.list(traza)) traza[["posicion_columna"]] else NULL
   })
-  trazabilidad <- lapply(seq_len(nrow(hallazgos)), function(i) {
+  # Un hallazgo contado en columnas o en formatos no tiene filas que trazar, y
+  # `.trazabilidad_hallazgo()` le devuelve la traza `no_aplica` antes de mirar
+  # nada mas. Se resuelve aca, sin extraer la fila con `hallazgos[i, ]`: cuando
+  # `columnas_duplicadas` publicaba un hallazgo por par, 300 columnas iguales
+  # eran 44.850, y extraer cada fila de esa tabla costaba 4,4 de los 10,1 s de
+  # esta funcion. Sigue valiendo para cualquier tabla con muchos hallazgos
+  # contados en columnas.
+  sin_filas <- as.character(hallazgos$unidad_conteo) %in% c("columna", "formato")
+  traza_no_aplica <- .trazabilidad_vacia(
+    "no_aplica", alcance = "no_aplica", limite = limite
+  )
+  trazabilidad <- vector("list", nrow(hallazgos))
+  trazabilidad[sin_filas] <- list(traza_no_aplica)
+  trazabilidad[!sin_filas] <- lapply(which(!sin_filas), function(i) {
     traza <- .trazabilidad_hallazgo(
       as.character(hallazgos$tipo_hallazgo[[i]]), hallazgos[i, , drop = FALSE],
       datos, nombres, resultados, expandir, aproximados, i,
@@ -3467,7 +3868,15 @@
     traza
   })
   hallazgos$trazabilidad <- I(trazabilidad)
-  for (i in seq_len(nrow(hallazgos))) {
+  # Solo tres tipos se ajustan con su traza. Recorrer los demas no cambiaba
+  # nada y buscaba igual la columna de cada uno entre todos los nombres, que
+  # crece con el producto de hallazgos por columnas: 5,2 s con 300 columnas
+  # iguales.
+  ajustables <- which(tipos_hallazgos %in% c(
+    "patron_raro", "casi_duplicados_vocabulario",
+    "variantes_equifrecuentes_vocabulario"
+  ))
+  for (i in ajustables) {
     traza <- hallazgos$trazabilidad[[i]]
     tipo <- as.character(hallazgos$tipo_hallazgo[[i]])
     indice_resultado <- .indice_columna_hallazgo(
@@ -3490,7 +3899,7 @@
       hallazgos$evidencia[[i]] <- paste0(
         hallazgos$evidencia[[i]], "; traza: ",
         .formatear_numero_publicado(traza$mostrados),
-        " filas mostradas (",
+        if (traza$mostrados == 1L) " fila mostrada (" else " filas mostradas (",
         .formatear_numero_publicado(traza$mostrados_formas_variantes),
         " formas variantes, ",
         .formatear_numero_publicado(traza$mostrados_formas_dominantes),
@@ -3595,7 +4004,37 @@
   campos <- c("severidad", "n_afectados", "unidad_conteo", "trazabilidad")
   if (!all(campos %in% names(hallazgos))) return(invisible(hallazgos))
   problemas <- character()
-  for (i in seq_len(nrow(hallazgos))) {
+  # Las filas que el recorrido de abajo saltea sin acusar nada se separan antes,
+  # de una vez: las informativas (`ok`), las que no traen una traza, y las
+  # contadas en columnas o formatos con su traza `no_aplica`. Cuando
+  # `columnas_duplicadas` publicaba un hallazgo por par, 1.000 columnas iguales
+  # eran 499.500, todos de la ultima clase, y recorrerlos de a uno costaba 10 s
+  # al perfilar y otros 8 en cada `hallazgos()`. Las demas filas siguen el recorrido completo, en el
+  # mismo orden. Un objeto editado a mano con columnas de otro tipo lo sigue
+  # entero.
+  revisar <- seq_len(nrow(hallazgos))
+  if (is.numeric(hallazgos$n_afectados) && is.list(hallazgos$trazabilidad) &&
+      (is.character(hallazgos$severidad) || is.factor(hallazgos$severidad)) &&
+      (is.character(hallazgos$unidad_conteo) ||
+       is.factor(hallazgos$unidad_conteo))) {
+    trazas <- hallazgos$trazabilidad
+    severidades <- as.character(hallazgos$severidad)
+    afectados_todos <- hallazgos$n_afectados
+    unidades <- as.character(hallazgos$unidad_conteo)
+    informativa <- !is.na(severidades) & severidades == "ok"
+    sin_traza <- !vapply(trazas, is.list, logical(1L))
+    no_aplica_declarada <- !informativa & !sin_traza &
+      is.finite(afectados_todos) & afectados_todos != 0 &
+      !is.na(unidades) & unidades %in% c("columna", "formato")
+    no_aplica_declarada[no_aplica_declarada] <- vapply(
+      trazas[no_aplica_declarada], function(traza) {
+        identical(traza$estado, "no_aplica") ||
+          identical(traza$alcance, "no_aplica")
+      }, logical(1L)
+    )
+    revisar <- which(!(informativa | sin_traza | no_aplica_declarada))
+  }
+  for (i in revisar) {
     severidad <- as.character(hallazgos$severidad[[i]])
     afectados <- hallazgos$n_afectados[[i]]
     unidad <- as.character(hallazgos$unidad_conteo[[i]])
@@ -3632,7 +4071,7 @@
     if (!isTRUE(is.finite(total)) ||
         (total != length(indices) && !isTRUE(traza$truncado))) {
       problemas <- c(problemas, paste0(
-        etiqueta, ": total de traza no coincide con sus indices"
+        etiqueta, ": total de traza no coincide con sus \u00edndices"
       ))
       next
     }
@@ -3690,15 +4129,15 @@
     condicion <- structure(
       list(
         message = paste0(
-          "Un hallazgo quedo con su trazabilidad inconsistente. ",
+          "Un hallazgo qued\u00f3 con su trazabilidad inconsistente. ",
           "**Es un problema de `lupa`, no de sus datos**: no hay nada que ",
           "corregir en la tabla.
 ",
-          "Lo que significa para lo que esta leyendo: las filas que respaldan ",
+          "Lo que significa para lo que est\u00e1 leyendo: las filas que respaldan ",
           "ese hallazgo pueden no corresponderse con lo que el hallazgo cuenta. ",
           "El hallazgo se conserva para no ocultar la evidencia.
 ",
-          "Si modifico a mano el objeto del perfil, esa es la causa mas ",
+          "Si modific\u00f3 a mano el objeto del perfil, esa es la causa m\u00e1s ",
           "probable; si no, conviene reportarlo con este detalle: ",
           paste(problemas, collapse = "; "), "."
         ),
@@ -3802,7 +4241,7 @@
       agregar_cobertura(
         "outliers", nombre, resultado$cuantitativo$motivo_outliers,
         paste(
-          "Si la columna es una magnitud y no un codigo, quitarla de",
+          "Si la columna es una magnitud y no un c\u00f3digo, quitarla de",
           "`columnas_codigo` para medir sus l\u00edmites de Tukey."
         )
       )
@@ -3810,7 +4249,7 @@
       agregar_cobertura(
         "outliers", nombre, resultado$cuantitativo$motivo_outliers,
         paste(
-          "Reunir al menos 20 valores finitos con variacion, o declarar otro",
+          "Reunir al menos 20 valores finitos con variaci\u00f3n, o declarar otro",
           "criterio de distancia antes de interpretar outliers."
         )
       )
@@ -3819,7 +4258,7 @@
       agregar_cobertura(
         "secuencia_entera", nombre,
         resultado$secuencia_entera$motivo_no_evaluada,
-        "Instalar el paquete 'bit64' para registrar sus metodos y medir la secuencia entera.",
+        "Instalar el paquete 'bit64' para registrar sus m\u00e9todos y medir la secuencia entera.",
         "bit64"
       )
     }
@@ -3833,8 +4272,8 @@
       agregar_cobertura(
         "perfil_geometria", nombre, geometria$motivo_representacion,
         paste(
-          "Convertir la columna a una geometria de 'sf' antes de perfilar, o",
-          "declarar que la columna no es geometrica."
+          "Convertir la columna a una geometr\u00eda de 'sf' antes de perfilar, o",
+            "declarar que la columna no es geom\u00e9trica."
         )
       )
     }
@@ -3849,7 +4288,7 @@
           "perfil_geometria", nombre, geometria$motivo_conversion,
           paste(
             "Revisar esos valores en la fuente: los que no tienen la forma de",
-            "su representacion no se entregan a sf para no arriesgar el proceso."
+            "su representaci\u00f3n no se entregan a sf para no arriesgar el proceso."
           )
         )
       }
@@ -3866,12 +4305,14 @@
         agregar_cobertura(
           "geometria_invalida", nombre,
           paste0(
-            "La validez topologica no se pudo evaluar en ",
+            "La validez topol\u00f3gica no se pudo evaluar en ",
             geometria$n_validez_no_evaluados,
-            " geometrias; el conteo informado cubre las ",
-            geometria$n_validez_evaluados, " restantes."
+            if (geometria$n_validez_no_evaluados == 1L) " geometr\u00eda; el conteo informado cubre " else
+              " geometr\u00edas; el conteo informado cubre ",
+            if (geometria$n_validez_evaluados == 1L) "la restante." else
+              paste0("las ", geometria$n_validez_evaluados, " restantes.")
           ),
-          "Revisar esas geometrias con st_is_valid() para saber por que fallan."
+          "Revisar esas geometr\u00edas con st_is_valid() para saber por qu\u00e9 fallan."
         )
       }
       if (isTRUE(geometria$n_dominio_no_evaluados > 0L)) {
@@ -3880,17 +4321,19 @@
           paste0(
             "El dominio no se pudo evaluar en ",
             geometria$n_dominio_no_evaluados,
-            " geometrias; el conteo informado cubre las ",
-            geometria$n_dominio_evaluados, " restantes."
+            if (geometria$n_dominio_no_evaluados == 1L) " geometr\u00eda; el conteo informado cubre " else
+              " geometr\u00edas; el conteo informado cubre ",
+            if (geometria$n_dominio_evaluados == 1L) "la restante." else
+              paste0("las ", geometria$n_dominio_evaluados, " restantes.")
           ),
-          "Revisar el CRS declarado y las coordenadas de esas geometrias."
+          "Revisar el CRS declarado y las coordenadas de esas geometr\u00edas."
         )
       }
       if (isFALSE(geometria$sf_evaluado)) {
         sin_sf <- .sf_no_disponible()
         agregar_cobertura(
           "perfil_geometria", nombre,
-          paste0("No se evaluo la geometria porque ", sin_sf$causa, "."),
+          paste0("No se evalu\u00f3 la geometr\u00eda porque ", sin_sf$causa, "."),
           sin_sf$remedio,
           "sf"
         )
@@ -3906,14 +4349,14 @@
                 "M"
               }
               paste0(
-                "El perfil geometrico no evaluo ", dimensiones,
-                " como dimensiones de medida; para la validez topologica ",
+                "El perfil geom\u00e9trico no evalu\u00f3 ", dimensiones,
+                " como dimensiones de medida; para la validez topol\u00f3gica ",
                 "retiro ", retiradas,
-                " con st_zm() y evaluo la geometria XY."
+                " con st_zm() y evalu\u00f3 la geometr\u00eda XY."
               )
             } else {
               paste0(
-                "El perfil geometrico usa solamente X e Y; no evaluo la dimension ",
+                "El perfil geom\u00e9trico usa solamente X e Y; no evalu\u00f3 la dimensi\u00f3n ",
                 dimensiones, "."
               )
             },
@@ -3926,16 +4369,16 @@
         if (is.na(fila$crs_declarado[[1L]])) {
           agregar(.nuevo_hallazgo(
             nombre, "crs_no_declarado", "error",
-            "La columna geometrica no declara un CRS; sin el no se puede validar el dominio ni comparar posiciones.",
+            "La columna geom\u00e9trica no declara un CRS; sin \u00e9l no se puede validar el dominio ni comparar posiciones.",
             "CRS ausente; n_fuera_de_dominio queda en NA.",
-            "Declarar el CRS de origen sin transformar ni asumir EPSG:4326 por omision."
+            "Declarar el CRS de origen sin transformar ni asumir EPSG:4326 por omisi\u00f3n."
           ))
         }
         if (isFALSE(geometria$validez_evaluada)) {
           agregar_cobertura(
             "validez_geometria", nombre,
             paste0("No se pudo evaluar st_is_valid(): ", geometria$motivo_validez),
-            "Revisar que las geometrias tengan una representacion compatible con sf.",
+            "Revisar que las geometr\u00edas tengan una representaci\u00f3n compatible con sf.",
             "sf"
           )
         } else if (isTRUE(fila$n_geometrias_invalidas > 0L)) {
@@ -3947,40 +4390,40 @@
             if (validez_geografica_planar) "sospechoso" else "error",
             if (validez_geografica_planar) {
               paste0(
-                "La columna contiene geometrias no validas bajo el criterio ",
-                "planar aplicado; en un CRS geografico esto requiere revision."
+                "La columna contiene geometr\u00edas no v\u00e1lidas bajo el criterio ",
+                "planar aplicado; en un CRS geogr\u00e1fico esto requiere revisi\u00f3n."
               )
             } else {
-              "La columna contiene geometrias topologicamente invalidas bajo el criterio planar."
+              "La columna contiene geometr\u00edas topol\u00f3gicamente inv\u00e1lidas bajo el criterio planar."
             },
             if (validez_geografica_planar) {
               paste0(
                 fila$n_geometrias_invalidas,
-                " geometrias no validas en el plano; este resultado no afirma ",
-                "invalidez esferica."
+                " geometr\u00edas no v\u00e1lidas en el plano; este resultado no afirma ",
+                "invalidez esf\u00e9rica."
               )
             } else {
               paste(
                 fila$n_geometrias_invalidas,
-                "geometrias invalidas segun st_is_valid() con criterio planar."
+                "geometr\u00edas inv\u00e1lidas seg\u00fan st_is_valid() con criterio planar."
               )
             },
             if (validez_geografica_planar) {
               paste0(
-                "Revisar la geometria con un criterio esferico adecuado antes ",
+                "Revisar la geometr\u00eda con un criterio esf\u00e9rico adecuado antes ",
                 "de repararla."
               )
             } else {
-              "Revisar la causa de invalidez antes de reparar o usar las geometrias."
+              "Revisar la causa de invalidez antes de reparar o usar las geometr\u00edas."
             }
           ))
         }
         if (isTRUE(fila$n_geometrias_vacias > 0L)) {
           agregar(.nuevo_hallazgo(
             nombre, "geometria_vacia", "sospechoso",
-            "La columna contiene geometrias vacias.",
-            paste(fila$n_geometrias_vacias, "geometrias vacias segun st_is_empty()."),
-            "Confirmar si la ausencia de coordenadas es valida o debe representarse como NA."
+            "La columna contiene geometr\u00edas vac\u00edas.",
+            paste(fila$n_geometrias_vacias, "geometr\u00edas vac\u00edas seg\u00fan st_is_empty()."),
+            "Confirmar si la ausencia de coordenadas es v\u00e1lida o debe representarse como NA."
           ))
         }
         if (!is.na(fila$crs_declarado[[1L]]) &&
@@ -3989,22 +4432,22 @@
             "dominio_geometria", nombre,
             paste0("No se pudo evaluar el dominio del CRS declarado: ",
                    geometria$motivo_dominio),
-            "Revisar que la definicion del CRS permita transformar y validar sus coordenadas.",
+            "Revisar que la definici\u00f3n del CRS permita transformar y validar sus coordenadas.",
             "sf"
           )
         } else if (isTRUE(fila$n_fuera_de_dominio > 0L)) {
           agregar(.nuevo_hallazgo(
             nombre, "coordenada_fuera_dominio", "error",
             paste0(
-              "La columna contiene geometrias cuyos valores, interpretados en ",
-              "las unidades del CRS declarado, quedan fuera de su area de uso. ",
+              "La columna contiene geometr\u00edas cuyos valores, interpretados en ",
+              "las unidades del CRS declarado, quedan fuera de su \u00e1rea de uso. ",
               "Este control detecta unidades incompatibles, como grados donde ",
               "se esperan metros; no detecta una zona UTM equivocada cuando ",
-              "los valores caen dentro del area de esa zona."
+              "los valores caen dentro del \u00e1rea de esa zona."
             ),
             paste0(
               fila$n_fuera_de_dominio,
-              " geometrias fuera del dominio global o del area de uso de ",
+              " geometr\u00edas fuera del dominio global o del \u00e1rea de uso de ",
               fila$crs_declarado, "."
             ),
             "Corregir el CRS declarado o las coordenadas desde la fuente; no reproyectar para ocultar el error."
@@ -4013,9 +4456,9 @@
         if (isTRUE(geometria$tipos_geometria_mixtos)) {
           agregar(.nuevo_hallazgo(
             nombre, "tipos_geometria_mixtos", "sospechoso",
-            "La misma columna mezcla tipos de geometria.",
+            "La misma columna mezcla tipos de geometr\u00eda.",
             paste(geometria$tipos_geometria, collapse = " y "),
-            "Confirmar si la mezcla es parte del modelo o separar los tipos en columnas o capas explicitas."
+            "Confirmar si la mezcla es parte del modelo o separar los tipos en columnas o capas expl\u00edcitas."
           ))
         }
       }
@@ -4047,8 +4490,9 @@
             )
           },
           paste0(
-            estructura$filas, " filas y ", estructura$componentes,
-            " componentes por fila; m\u00e9tricas por valor en NA."
+            estructura$filas, if (estructura$filas == 1L) " fila y " else " filas y ", estructura$componentes,
+            if (estructura$componentes == 1L) " componente por fila; m\u00e9tricas por valor en NA." else
+              " componentes por fila; m\u00e9tricas por valor en NA."
           ),
           if (sin_escritura) {
             "Convertir la columna a tipos de base -una columna por campo- antes de perfilarla."
@@ -4080,17 +4524,18 @@
       agregar(.nuevo_hallazgo(
         nombre, "constante", "sospechoso",
         paste(
-          "La columna no tiene ningun valor: los", fila$n_faltantes_disfrazados,
-          "que hay dicen ausencia sin estar codificados como NA, asi que es una",
-          "columna vacia escrita de otra forma, no una columna constante."
+          "La columna no tiene ning\u00fan valor: los", fila$n_faltantes_disfrazados,
+          "que hay dicen ausencia sin estar codificados como NA, as\u00ed que es una",
+          "columna vac\u00eda escrita de otra forma, no una columna constante."
         ),
         # La evidencia cuenta lo MISMO que la descripcion y la traza: todas las
         # formas de ausencia. Con dos formas -`""` y `" "`- decia "Valor unico:
         # ; frecuencia: 3" al lado de "los 4 que hay", y el paquete se acusaba a
         # si mismo sobre datos sin tocar.
         paste0(
-          fila$n_faltantes_disfrazados, " de ", n_validos, " valores dicen ",
-          "ausencia; el mas frecuente: \"", fila$moda, "\" (",
+          fila$n_faltantes_disfrazados, " de ", n_validos,
+          if (n_validos == 1L) " valor dice " else " valores dicen ",
+          "ausencia; el m\u00e1s frecuente: \"", fila$moda, "\" (",
           fila$frecuencia_moda, ")"
         ),
         paste(
@@ -4119,7 +4564,7 @@
       if (valor_sin_representar) {
         agregar_cobertura(
           "constante", nombre,
-          "Se midi\u00f3 un \u00fanico valor distinto y la frecuencia se deduce de las filas validas, pero el valor no se pudo representar como texto porque la columna no es at\u00f3mica.",
+          "Se midi\u00f3 un \u00fanico valor distinto y la frecuencia se deduce de las filas v\u00e1lidas, pero el valor no se pudo representar como texto porque la columna no es at\u00f3mica.",
           "Separar los componentes de la columna o declarar una representaci\u00f3n textual antes de informar el valor."
         )
       }
@@ -4130,8 +4575,8 @@
       agregar(.nuevo_hallazgo(
         nombre, "valor_concentrado", "sospechoso",
         paste(
-          "Un valor modal concentra una fraccion inusualmente alta de la",
-          "columna. Es una sospecha para revisar, no una acusacion de que el",
+          "Un valor modal concentra una fracci\u00f3n inusualmente alta de la",
+          "columna. Es una sospecha para revisar, no una acusaci\u00f3n de que el",
           "valor sea incorrecto."
         ),
         paste0(
@@ -4142,13 +4587,13 @@
           .formatear_numero_publicado(concentracion$frecuencia_segundo),
           "; cociente moda/segundo: ",
           .formatear_decimal_publicado(concentracion$cociente),
-          "; fraccion de la moda sobre validos: ",
+          "; fracci\u00f3n de la moda sobre v\u00e1lidos: ",
           .formatear_decimal_publicado(concentracion$fraccion)
         ),
         paste(
           "Revisar el valor modal y el proceso que origina la columna;",
-          "confirmar si la concentracion es esperable o si hay un relleno o",
-          "una codificacion repetida."
+          "confirmar si la concentraci\u00f3n es esperable o si hay un relleno o",
+          "una codificaci\u00f3n repetida."
         )
       ))
     }
@@ -4162,11 +4607,17 @@
           "muy pocos valores."
         ),
         paste0(
-          casi_clave$n_distintos, " valores distintos de ", casi_clave$n_filas,
+          casi_clave$n_distintos,
+          if (casi_clave$n_distintos == 1L) " valor distinto de " else " valores distintos de ",
+          casi_clave$n_filas,
+          if (casi_clave$n_filas == 1L) " fila" else " filas",
           " (", .formatear_decimal_publicado(casi_clave$tasa_distintos), "); ",
-          casi_clave$n_valores_colisionados, " valores colisionados; ",
-          casi_clave$n_filas_en_colision, " filas en colision; ",
-          casi_clave$n_duplicados_excedentes, " duplicados excedentes; ",
+          casi_clave$n_valores_colisionados,
+          if (casi_clave$n_valores_colisionados == 1L) " valor colisionado; " else " valores colisionados; ",
+          casi_clave$n_filas_en_colision,
+          if (casi_clave$n_filas_en_colision == 1L) " fila en colisi\u00f3n; " else " filas en colisi\u00f3n; ",
+          casi_clave$n_duplicados_excedentes,
+          if (casi_clave$n_duplicados_excedentes == 1L) " duplicado excedente; " else " duplicados excedentes; ",
           "concentracion_colisiones=",
           .formatear_decimal_publicado(casi_clave$concentracion_colisiones),
           ". ",
@@ -4187,7 +4638,7 @@
           "; doble_admitido_solo_sin_fraccionarios_finitos=TRUE."
         ),
         paste0(
-          "Revisar los valores y filas en colision; corregirlos o confirmar ",
+          "Revisar los valores y filas en colisi\u00f3n; corregirlos o confirmar ",
           "que la columna no es una clave antes de usarla como identificador."
         )
       ))
@@ -4249,11 +4700,14 @@
         } else {
           paste(
             "Los valores ocupan un tramo compacto de los enteros y se repiten:",
-            "la forma es la de un codigo de catalogo, no la de una magnitud."
+            "la forma es la de un c\u00f3digo de cat\u00e1logo, no la de una magnitud."
           )
         },
         paste0(
-          fila$n_distintos, " valores distintos de ", n_validos,
+          fila$n_distintos,
+          if (fila$n_distintos == 1L) " valor distinto de " else " valores distintos de ",
+          n_validos,
+          if (n_validos == 1L) " valor" else " valores",
           " (", .formatear_decimal_publicado(fila$tasa_distintos), ")",
           if (isTRUE(fila$secuencia_entera_densa)) paste0(
             "; secuencia_entera_densa=TRUE; densidad=",
@@ -4269,8 +4723,8 @@
           "Validar con el diccionario de datos si corresponde declarar una clave."
         } else {
           paste(
-            "Validar con el diccionario de datos si es un codigo; si lo es,",
-            "declarar su catalogo permite medir los valores fuera de dominio."
+            "Validar con el diccionario de datos si es un c\u00f3digo; si lo es,",
+            "declarar su cat\u00e1logo permite medir los valores fuera de dominio."
           )
         }
       ))
@@ -4315,8 +4769,9 @@
         "valor_fuera_de_aplicabilidad", nombre,
         paste0(
           "En ", fila$n_presentes_en_aplicabilidad_indeterminada,
-          " filas con valor presente el predicado de aplicabilidad no se pudo ",
-          "determinar, asi que no se sabe si esos valores corresponden al ",
+          if (fila$n_presentes_en_aplicabilidad_indeterminada == 1L) " fila con valor presente el predicado de aplicabilidad no se pudo " else
+            " filas con valor presente el predicado de aplicabilidad no se pudo ",
+          "determinar, as\u00ed que no se sabe si esos valores corresponden al ",
           "universo o no."
         ),
         paste0(
@@ -4336,8 +4791,9 @@
         "La columna tiene valores en filas donde la regla declarada dice que no corresponde.",
         paste0(
           fila$n_presentes_fuera_de_aplicabilidad,
-          " valores presentes fuera del universo aplicable de ",
-          fila$n_no_aplica, " filas."
+          if (fila$n_presentes_fuera_de_aplicabilidad == 1L) " valor presente fuera del universo aplicable de " else
+            " valores presentes fuera del universo aplicable de ",
+          fila$n_no_aplica, if (fila$n_no_aplica == 1L) " fila." else " filas."
         ),
         "Revisar la regla de aplicabilidad o el proceso que carga la columna."
       ))
@@ -4370,8 +4826,10 @@
         nombre, "faltantes", severidad,
         "La proporci\u00f3n total de faltantes supera el umbral configurado.",
           paste0(
-            fila$n_faltantes, " ausentes reales y ",
-            fila$n_faltantes_disfrazados, " disfrazados (",
+            fila$n_faltantes,
+            if (fila$n_faltantes == 1L) " ausente real y " else " ausentes reales y ",
+            fila$n_faltantes_disfrazados,
+            if (fila$n_faltantes_disfrazados == 1L) " disfrazado (" else " disfrazados (",
             .formatear_decimal_publicado(fila$prop_faltantes_totales),
             " del total)"
           ),
@@ -4536,7 +4994,7 @@
       # "no se pudo establecer" es la conducta que el paquete promete; un espacio
       # en blanco no declara nada.
       resumidas_texto <- if (length(resumidas) != 1L || is.na(resumidas)) {
-        "un numero que no se pudo establecer"
+        "un n\u00famero que no se pudo establecer"
       } else {
         .formatear_numero_publicado(resumidas)
       }
@@ -4545,11 +5003,11 @@
       encabezado <- if (!isTRUE(estado_parcial) ||
                         (length(resumidas) == 1L && !is.na(resumidas) &&
                          resumidas == 0)) {
-        "El resumen cuantitativo no se pudo calcular y dejo afuera "
+        "El resumen cuantitativo no se pudo calcular y dej\u00f3 afuera "
       } else {
         paste0(
-          "El resumen cuantitativo se calculo sobre ", resumidas_texto,
-          " valores y dejo afuera "
+          "El resumen cuantitativo se calcul\u00f3 sobre ", resumidas_texto,
+          " valores y dej\u00f3 afuera "
         )
       }
       agregar_cobertura(
@@ -4575,7 +5033,7 @@
           },
           .detalle_no_finitos_resumen(fila),
           "; el tipo o formato se",
-          " descubrio sobre una muestra de ",
+          " descubri\u00f3 sobre una muestra de ",
           .formatear_numero_publicado(analizados), " de ",
           .formatear_numero_publicado(total),
           " filas."
@@ -4604,14 +5062,14 @@
     if (identical(fila$zona_horaria_origen[[1L]], "sin_declarar")) {
       agregar_cobertura(
         "zona_horaria_fecha_hora", nombre,
-        "No se evaluo el cambio de fecha civil a UTC porque la zona horaria de origen no esta declarada.",
+        "No se evalu\u00f3 el cambio de fecha civil a UTC porque la zona horaria de origen no est\u00e1 declarada.",
         "Declarar attr(x, 'tzone') con la zona horaria de origen antes de interpretar el calendario civil."
       )
     } else if (texto_con_desplazamiento) {
       agregar_cobertura(
         "zona_horaria_fecha_hora", nombre,
         paste0(
-          "No se evaluo el cambio de fecha civil a UTC: la columna es texto con ",
+          "No se evalu\u00f3 el cambio de fecha civil a UTC: la columna es texto con ",
           "el desplazamiento horario escrito, el resumen publica el instante en ",
           "UTC y su fecha puede no ser la escrita."
         ),
@@ -4661,6 +5119,24 @@
         round(analizadas * (1 - compatible))
       } else NA_real_
       sobre_muestra <- isTRUE(fila$muestreado_tipo_inferido)
+      # Que todos los valores sean compatibles no dice que convertirlos no
+      # pierda nada: `007` es compatible con entero y pierde el cero, y una
+      # columna con tres formatos de fecha une escrituras distintas. Son las
+      # razones por las que el plan declara la conversion destructiva o la
+      # bloquea; la evidencia las nombra, y solo sin ninguna afirma que no se
+      # pierde nada. Ver `.riesgos_conversion_tipo()`.
+      riesgos_conversion <- if (isTRUE(compatible == 1)) {
+        .riesgos_conversion_tipo(
+          if (is.data.frame(datos) && i <= ncol(datos)) datos[[i]] else NULL,
+          fila, resultado$formatos,
+          # Los meses escritos que la inferencia ya leyo: sin ellos se volvian a
+          # detectar, una pasada entera sobre la columna por segunda vez.
+          meses_texto = attr(resultado$inferencia$formatos_fecha, "meses_texto",
+                             exact = TRUE)
+        )
+      } else character()
+      sin_perdida <- isTRUE(compatible == 1) && !is.null(riesgos_conversion) &&
+        !length(riesgos_conversion)
       agregar(.nuevo_hallazgo(
         nombre, "tipo_declarado_distinto", "sospechoso",
         "El tipo declarado no coincide con el tipo impl\u00edcito dominante.",
@@ -4671,22 +5147,32 @@
             .formatear_decimal_publicado(compatible), " compatible)"
           ),
           if (is.finite(incompatibles) && incompatibles > 0) paste0(
-            "; convertir dejaria ", .miles_trabajo(incompatibles), " de ",
-            .miles_trabajo(analizadas), " valores en NA"
-          ) else if (isTRUE(compatible == 1)) {
-            "; la conversion no pierde ningun valor"
+            "; convertir dejar\u00eda ", .miles_trabajo(incompatibles), " de ",
+            .miles_trabajo(analizadas),
+            if (analizadas == 1L) " valor en NA" else " valores en NA"
+          ) else if (sin_perdida) {
+            "; la conversi\u00f3n no pierde ning\u00fan valor"
+          } else if (length(riesgos_conversion)) {
+            paste0("; ", paste(riesgos_conversion, collapse = "; "))
           } else "",
           if (sobre_muestra) paste0(
             "; medido sobre una muestra de ", .miles_trabajo(analizadas),
-            " filas, no sobre la columna entera"
+            if (analizadas == 1L) " fila, no sobre la columna entera" else
+              " filas, no sobre la columna entera"
           ) else ""
         ),
-        if (isTRUE(compatible == 1)) {
+        if (isTRUE(compatible == 1) && !length(riesgos_conversion)) {
           "Confirmar el tipo esperado y convertir la columna de forma expl\u00edcita."
+        } else if (length(riesgos_conversion)) {
+          paste(
+            "Confirmar el tipo esperado. Antes de convertir, resolver lo que",
+            "la conversi\u00f3n perder\u00eda: el plan de limpieza la declara",
+            "destructiva o la bloquea."
+          )
         } else {
           paste(
             "Confirmar el tipo esperado. Antes de convertir, revisar los valores",
-            "que no encajan: la conversion los vuelve NA sin avisar."
+            "que no encajan: la conversi\u00f3n los vuelve NA sin avisar."
           )
         }
       ))
@@ -4711,7 +5197,7 @@
       agregar_cobertura(
         "patron_raro", nombre,
         paste0(
-          "No se evaluo patron_raro porque el patron dominante ocupa ",
+          "No se evalu\u00f3 patron_raro porque el patr\u00f3n dominante ocupa ",
           .formatear_decimal_publicado(proporcion_dominante),
           " de los valores analizados; es menor que ",
           "umbral_patron_dominante=",
@@ -4762,7 +5248,8 @@
           identical(clase_desvio, "largo_de_corrida"),
           "; patrones_no_dominantes_excluidos_por_umbral=",
           if (is.na(n_excluidos)) "NA" else as.character(n_excluidos),
-          " filas (umbral_patron_raro=",
+          if (is.na(n_excluidos) || n_excluidos != 1L) " filas (umbral_patron_raro=" else
+            " fila (umbral_patron_raro=",
           .formatear_decimal_publicado(umbral_patron_raro),
           ")",
           .nota_conteo_muestral(resultado$patrones)
@@ -4780,14 +5267,17 @@
           "patron_raro", nombre,
           paste0(
             "Se detectaron ", n_raros,
-            " patrones raros, pero la trazabilidad conserva solo ",
-            limite_raros, " nombres; la enumeracion de filas no cubre todos",
+            if (n_raros == 1L) " patr\u00f3n raro, pero la trazabilidad conserva s\u00f3lo " else
+              " patrones raros, pero la trazabilidad conserva s\u00f3lo ",
+            limite_raros,
+            if (limite_raros == 1L) " nombre; la enumeraci\u00f3n de filas no cubre " else
+              " nombres; la enumeraci\u00f3n de filas no cubre todos",
             " los patrones raros. El resumen y la evidencia siguen mostrando",
-            " como maximo seis."
+            " como m\u00e1ximo seis."
           ),
           paste0(
-            "Revisar la distribucion completa de patrones o aumentar el limite ",
-            "de trazabilidad antes de usar la enumeracion de filas como exhaustiva."
+            "Revisar la distribuci\u00f3n completa de patrones o aumentar el l\u00edmite ",
+            "de trazabilidad antes de usar la enumeraci\u00f3n de filas como exhaustiva."
           )
         )
       }
@@ -4806,11 +5296,11 @@
       agregar_cobertura(
         "patron_raro", nombre,
         paste0(
-          "patron_raro se evaluo sobre una muestra de ",
+          "patron_raro se evalu\u00f3 sobre una muestra de ",
           .formatear_numero_publicado(analizados), " de ",
           .formatear_numero_publicado(total),
-          " filas y no encontro patrones raros en ella; un patron raro ",
-          "presente solo fuera de la muestra no se detecta."
+          " filas y no encontr\u00f3 patrones raros en ella; un patr\u00f3n raro ",
+            "presente s\u00f3lo fuera de la muestra no se detecta."
         ),
         paste0(
           "Volver a perfilar con un valor mayor de `muestra` -`Inf` recorre ",
@@ -4865,10 +5355,10 @@
         if (solo_significativos) "sospechoso" else "error",
         if (solo_significativos) {
           paste(
-            "Los unicos caracteres invisibles son uniones de ancho cero",
-            "(ZWJ/ZWNJ). Unen emojis y ligan escrituras como el arabe, y ahi",
+            "Los \u00fanicos caracteres invisibles son uniones de ancho cero",
+            "(ZWJ/ZWNJ). Unen emojis y ligan escrituras como el \u00e1rabe, y ah\u00ed",
             "forman parte del texto; entre letras latinas no cumplen ninguna",
-            "funcion y rompen las comparaciones sin verse."
+            "funci\u00f3n y rompen las comparaciones sin verse."
           )
         } else {
           paste0(
@@ -4879,13 +5369,14 @@
         resultado$diagnostico_texto$evidencia_controles_invisibles,
         if (solo_significativos) {
           paste(
-            "Mirar entre que caracteres estan: si unen emojis o ligan una",
+            "Mirar entre qu\u00e9 caracteres est\u00e1n: si unen emojis o ligan una",
             "escritura que lo requiere, no hay nada que hacer; si separan",
             "palabras latinas, hay que eliminarlas."
           )
         } else if (hay(eliminables) && !hay(espacios) && !hay(significativos)) {
           paste0(
-            "Eliminar los ", .miles_trabajo(eliminables), " invisibles de ",
+            "Eliminar ", .miles_trabajo(eliminables),
+            if (eliminables == 1L) " invisible de " else " invisibles de ",
             "transporte: no aportan nada y rompen las comparaciones."
           )
         } else {
@@ -4920,7 +5411,7 @@
     if (isFALSE(fila$unicode_evaluado[[1L]])) {
       agregar_cobertura(
         "normalizacion_unicode", nombre,
-        "No se pudo evaluar la normalizacion Unicode: falta el paquete opcional 'stringi'.",
+        "No se pudo evaluar la normalizaci\u00f3n Unicode: falta el paquete opcional 'stringi'.",
         "Instalar el paquete 'stringi' para evaluar equivalencias Unicode NFC/NFD.",
         "stringi"
       )
@@ -4992,11 +5483,11 @@
         paste(
           "No se evaluaron `numero_como_texto`, `unidades_mixtas` ni",
           "`monedas_mixtas`: la columna se declar\u00f3 en `columnas_codigo`, as\u00ed",
-          "que es un codigo y no una cantidad escrita como texto, y no se",
-          "propone convertirla a numero."
+          "que es un c\u00f3digo y no una cantidad escrita como texto, y no se",
+          "propone convertirla a n\u00famero."
         ),
         paste(
-          "Si la columna es una cantidad y no un codigo, quitarla de",
+          "Si la columna es una cantidad y no un c\u00f3digo, quitarla de",
           "`columnas_codigo`."
         )
       )
@@ -5035,14 +5526,14 @@
       agregar(.nuevo_hallazgo(
         nombre, "unidades_mixtas", "sospechoso",
         paste0(
-          "La columna numerica escrita como texto mezcla dos o mas sufijos ",
+          "La columna num\u00e9rica escrita como texto mezcla dos o m\u00e1s sufijos ",
           "de unidad; el perfil no los convierte ni supone equivalencias."
         ),
         paste0(
           "Unidades observadas: ", evidencia_unidades,
           "; celdas con unidad: ", sum(unidades)
         ),
-        "Separar o normalizar las unidades segun una regla declarada antes de sumar o comparar los valores."
+        "Separar o normalizar las unidades seg\u00fan una regla declarada antes de sumar o comparar los valores."
       ))
     }
 
@@ -5055,12 +5546,13 @@
       agregar(.nuevo_hallazgo(
         nombre, "monedas_mixtas", "sospechoso",
         paste0(
-          "La columna numerica escrita como texto mezcla dos o mas monedas; ",
+          "La columna num\u00e9rica escrita como texto mezcla dos o m\u00e1s monedas; ",
           "el perfil no convierte ni supone tasas de cambio."
         ),
         paste0(
           "Monedas observadas: ", evidencia_monedas,
-          "; celdas con moneda: ", sum(monedas)
+          "; celdas con moneda: ", sum(monedas),
+          if (sum(monedas) == 1L) " celda" else " celdas"
         ),
         "Separar las monedas o declarar una regla de negocio antes de sumar o comparar los valores."
       ))
@@ -5071,14 +5563,15 @@
         distribucion <- multivaluado$valores_por_celda
         evidencia_celdas <- paste(
           paste0(names(distribucion), " valores: ",
-                 as.integer(distribucion), " celdas"),
+                 as.integer(distribucion),
+                 ifelse(as.integer(distribucion) == 1L, " celda", " celdas")),
           collapse = "; "
         )
         agregar(.nuevo_hallazgo(
           nombre, "celdas_multivaluadas", "sospechoso",
           paste0(
             "Una minoria homogenea de celdas contiene varios valores; las ",
-            "partes comparten tipo y patron con el resto de la columna."
+            "partes comparten tipo y patr\u00f3n con el resto de la columna."
           ),
           paste0(
             "Delimitador: ", multivaluado$delimitador,
@@ -5171,19 +5664,20 @@
         nombre, "valores_subnormales", "sospechoso",
         paste(
           "La columna contiene valores subnormales. Casi siempre salen de",
-          "reinterpretar un patron de bits o de un desbordamiento por defecto,",
-          "y entonces las estadisticas describen esos valores y no los datos",
-          "que se quiso guardar. No es concluyente: un calculo que desborda",
+          "reinterpretar un patr\u00f3n de bits o de un desbordamiento por defecto,",
+          "y entonces las estad\u00edsticas describen esos valores y no los datos",
+          "que se quiso guardar. No es concluyente: un c\u00e1lculo que desborda",
           "por defecto -`2^-1050` da 8,3e-317- es una magnitud real a esa",
           "escala."
         ),
         paste0(
           n_subnormales, " de ", sum(!is.na(datos[[indice_datos]])),
-          " valores por debajo de ", format(.Machine$double.xmin, digits = 3),
+          if (sum(!is.na(datos[[indice_datos]])) == 1L) " valor por debajo de " else
+            " valores por debajo de ", format(.Machine$double.xmin, digits = 3),
           " en valor absoluto, sin ser cero."
         ),
         paste(
-          "Revisar como se escribio la columna. Un caso conocido: escribir una",
+          "Revisar c\u00f3mo se escribi\u00f3 la columna. Un caso conocido: escribir una",
           "columna `integer64` en algunos motores la guarda como doble",
           "reinterpretando los bits. Si la columna son probabilidades o",
           "verosimilitudes calculadas, el aviso no aplica."
@@ -5197,7 +5691,8 @@
       agregar(.nuevo_hallazgo(
         nombre, "negativos_no_permitidos", "sospechoso",
         "La columna contiene valores negativos aunque se configur\u00f3 como no negativa.",
-        paste(fila$n_negativos, "valores negativos"),
+        paste0(fila$n_negativos,
+               if (fila$n_negativos == 1L) " valor negativo" else " valores negativos"),
         "Corregir los valores o ajustar la restricci\u00f3n del dominio."
       ))
     }
@@ -5219,30 +5714,37 @@
         # descripcion no: la fuga entraba por ahi.
         if (isTRUE(fila$dato_personal_protegido)) {
           paste0(
-            "Un valor aparece ", fila$centinela_repeticiones, " veces, queda ",
-            "fuera de los limites de la columna y tiene la forma de los codigos ",
+            "Un valor aparece ", fila$centinela_repeticiones,
+            if (fila$centinela_repeticiones == 1L) " vez, queda " else " veces, queda ",
+            "fuera de los l\u00edmites de la columna y tiene la forma de los c\u00f3digos ",
             "que se usan para decir \"sin dato\". No se nombra porque la columna ",
-            "esta protegida, y no se cuenta como ausencia porque no esta ",
+            "est\u00e1 protegida, y no se cuenta como ausencia porque no est\u00e1 ",
             "declarado."
           )
         } else {
           paste0(
             "El valor ", .texto_valor(fila$centinela_valor), " aparece ",
-            fila$centinela_repeticiones, " veces, queda fuera de los limites de ",
-            "la columna y tiene la forma de los codigos que se usan para decir ",
-            "\"sin dato\". No se cuenta como ausencia porque no esta declarado."
+            fila$centinela_repeticiones,
+            if (fila$centinela_repeticiones == 1L) " vez, queda fuera de los l\u00edmites de " else
+              " veces, queda fuera de los l\u00edmites de ",
+            "la columna y tiene la forma de los c\u00f3digos que se usan para decir ",
+            "\"sin dato\". No se cuenta como ausencia porque no est\u00e1 declarado."
           )
         },
         if (isTRUE(fila$dato_personal_protegido)) {
           paste0(
             "Repeticiones: ", fila$centinela_repeticiones,
-            "; valores fuera de los l\u00edmites: ", fila$n_outliers
+            if (fila$centinela_repeticiones == 1L) " vez; valores fuera de los l\u00edmites: " else
+              " veces; valores fuera de los l\u00edmites: ", fila$n_outliers,
+            if (fila$n_outliers == 1L) " valor" else " valores"
           )
         } else {
           paste0(
             "Valor: ", .texto_valor(fila$centinela_valor), "; repeticiones: ",
-            fila$centinela_repeticiones, "; valores fuera de los l\u00edmites: ",
-            fila$n_outliers
+            fila$centinela_repeticiones,
+            if (fila$centinela_repeticiones == 1L) " vez; valores fuera de los l\u00edmites: " else
+              " veces; valores fuera de los l\u00edmites: ", fila$n_outliers,
+            if (fila$n_outliers == 1L) " valor" else " valores"
           )
         },
         # Decia solo "agregarlo para que se cuente como faltante", y eso dejaba
@@ -5255,7 +5757,7 @@
         paste0(
           "Si es un c\u00f3digo de ausencia, agregarlo a `sentinelas_numericos`: ",
           "pasa a contarse como faltante y sale de `media`, `mediana`, ",
-          "`minimo`, `maximo` y `desvio`, que declaran cuantos valores dejaron ",
+          "`minimo`, `maximo` y `desvio`, que declaran cu\u00e1ntos valores dejaron ",
           "afuera en `n_valores_excluidos_resumen`. `moda` y `n_distintos` ",
           "siguen describiendo lo que hay guardado. Si es un dato real, no hay ",
           "nada que hacer."
@@ -5288,20 +5790,21 @@
             if (isTRUE(is.finite(
               suppressWarnings(as.numeric(fila$densidad_sin_centinela))
             ))) {
-              " de los enteros entre su minimo y su maximo una vez descontado el centinela"
+              " de los enteros entre su m\u00ednimo y su m\u00e1ximo una vez descontado el centinela"
             } else {
-              " de los enteros entre su minimo y su maximo"
+              " de los enteros entre su m\u00ednimo y su m\u00e1ximo"
             },
-            ", asi que es una ",
-            "numeracion -un identificador o un codigo- y no una magnitud. ",
+            ", as\u00ed que es una ",
+            "numeraci\u00f3n -un identificador o un c\u00f3digo- y no una magnitud. ",
             "Los l\u00edmites de Tukey describen una distribuci\u00f3n; que un c\u00f3digo ",
-            "quede lejos de la mediana no dice nada de su calidad. Se habrian ",
-            "senalado ", fila$n_outliers, " valores."
+            "quede lejos de la mediana no dice nada de su calidad. Se habr\u00edan ",
+            "se\u00f1alado ", fila$n_outliers,
+            if (fila$n_outliers == 1L) " valor." else " valores."
           ),
           paste(
-            "Si la columna es una magnitud y no una numeracion, revisar por que",
+            "Si la columna es una magnitud y no una numeraci\u00f3n, revisar por qu\u00e9",
             "sus valores ocupan un tramo tan compacto de los enteros. Un valor",
-            "fuera de escala rompe esa compacidad y vuelve a senalarse."
+          "fuera de escala rompe esa compacidad y vuelve a se\u00f1alarse."
           )
         )
       } else {
@@ -5315,7 +5818,7 @@
           paste(fila$n_outliers, "valores"),
           paste(
             "Mirar esos valores: un centinela como 9999 o una fecha de 1900",
-            "aparecen asi, y tambien un dato real poco frecuente. Estar lejos",
+            "aparecen as\u00ed, y tambi\u00e9n un dato real poco frecuente. Estar lejos",
             "no los vuelve errores."
           )
         ))
@@ -5455,7 +5958,57 @@
 }
 
 .columnas_duplicadas <- function(datos, nombres) {
-  .pares_de_columnas_identicas(datos, seq_len(ncol(datos)), nombres)
+  .grupos_de_columnas_identicas(datos, seq_len(ncol(datos)), nombres)
+}
+
+# Las filas de `columnas_duplicadas` que forman cada grupo. El detector deja la
+# clase en el atributo `grupo`; sin el -una tabla armada a mano- las filas de un
+# grupo son las consecutivas con la misma primera columna, que es como las
+# ordena el detector.
+# Las posiciones en la tabla de las columnas de un grupo, la primera y despues
+# las repetidas. Sin las que deja el detector -una tabla armada a mano-, por
+# nombre, que con nombres repetidos da la primera de las que se llaman igual.
+.posiciones_grupo_duplicadas <- function(duplicadas, filas, posiciones, columnas) {
+  if (is.list(posiciones) && length(posiciones) == 2L &&
+      length(posiciones[[1L]]) == nrow(duplicadas) &&
+      length(posiciones[[2L]]) == nrow(duplicadas)) {
+    return(as.integer(c(posiciones[[1L]][[filas[[1L]]]], posiciones[[2L]][filas])))
+  }
+  .indice_nombre(
+    c(duplicadas$columna_1[[filas[[1L]]]], duplicadas$columna_2[filas]), columnas
+  )
+}
+
+.nombres_repetidos_en_tabla <- function(columnas) {
+  claves <- .nombres_para_operar(as.character(columnas))
+  claves %in% claves[duplicated(claves)]
+}
+
+# Un nombre que, puesto suelto entre los ` = ` de la evidencia, no se lee como
+# un nombre y uno solo: vacio, con espacios al borde, con un separador de la
+# evidencia o de una lista de columnas (`=`, `;`, `,`), con comillas, o con algo
+# que al publicarse se escapa.
+.nombre_ambiguo_en_evidencia_duplicadas <- function(nombres) {
+  nombres <- as.character(nombres)
+  ambiguo <- is.na(nombres)
+  presentes <- !ambiguo
+  ambiguo[presentes] <- !nzchar(nombres[presentes]) |
+    grepl("^[[:space:]]|[[:space:]]$|[=;,\"]", nombres[presentes],
+          perl = TRUE, useBytes = TRUE)
+  for (i in which(!ambiguo)) {
+    ambiguo[[i]] <- isTRUE(tryCatch(
+      .hay_escapes_al_publicar(nombres[[i]]), error = function(e) TRUE
+    ))
+  }
+  ambiguo
+}
+
+.filas_por_grupo_duplicadas <- function(duplicadas, grupo = NULL) {
+  if (is.null(grupo) || length(grupo) != nrow(duplicadas)) {
+    primera <- .nombres_para_operar(duplicadas$columna_1)
+    grupo <- cumsum(c(TRUE, primera[-1L] != primera[-length(primera)]))
+  }
+  unname(split(seq_len(nrow(duplicadas)), match(grupo, unique(grupo))))
 }
 
 .construir_hallazgos <- function(datos, resultados, columnas, duplicadas,
@@ -5486,9 +6039,20 @@
                                  evaluacion_clave = NULL,
                                  trazador_tiempos = NULL,
                                  nombres_texto = NULL,
-                                 duplicadas_texto = NULL) {
+                                 duplicadas_texto = NULL,
+                                 grupo_duplicadas = NULL,
+                                 posiciones_duplicadas = NULL) {
   if (is.null(nombres_texto)) nombres_texto <- .marcar_utf8_textos(columnas)
   if (is.null(duplicadas_texto)) duplicadas_texto <- duplicadas
+  if (is.null(grupo_duplicadas)) {
+    grupo_duplicadas <- attr(duplicadas, "grupo", exact = TRUE)
+  }
+  if (is.null(posiciones_duplicadas)) {
+    posiciones_duplicadas <- list(
+      attr(duplicadas, "posicion_1", exact = TRUE),
+      attr(duplicadas, "posicion_2", exact = TRUE)
+    )
+  }
   hallazgos_columnas <- .hallazgos_columnas(
     resultados, columnas, umbral_alta_cardinalidad,
     umbral_faltantes_sospechoso, umbral_faltantes_error,
@@ -5559,9 +6123,9 @@
         paste0(
           "La clave declarada contiene valores ausentes: ", nombre_clave,
           if (length(clave_declarada) == 1L) {
-            " no garantiza la restriccion NOT NULL."
+            " no garantiza la restricci\u00f3n NOT NULL."
           } else {
-            " no garantizan la restriccion NOT NULL."
+            " no garantizan la restricci\u00f3n NOT NULL."
           }
         ),
         paste0(
@@ -5593,7 +6157,7 @@
           hallazgos[[length(hallazgos) + 1L]] <- .nuevo_hallazgo(
             NA_character_, "clave_no_unica", "error",
             paste0(
-              "La clave declarada no identifica filas unicas entre las ",
+              "La clave declarada no identifica filas \u00fanicas entre las ",
               "filas con la clave completa: ", nombre_clave,
               if (length(clave_declarada) == 1L) {
                 " repite valores."
@@ -5602,7 +6166,9 @@
               }
             ),
             paste0(
-              length(indices_colision), " filas con la clave completa en ",
+              length(indices_colision),
+              if (length(indices_colision) == 1L) " fila con la clave completa en " else
+                " filas con la clave completa en ",
               n_valores_repetidos,
               if (n_valores_repetidos == 1L) {
                 " valor repetido"
@@ -5627,7 +6193,9 @@
       NA_character_, "filas_duplicadas", "error",
       "La tabla contiene filas duplicadas exactas.",
       paste0(
-        n_filas_en_grupos_duplicados, " filas en grupos duplicados (",
+        n_filas_en_grupos_duplicados,
+        if (n_filas_en_grupos_duplicados == 1L) " fila en grupos duplicados (" else
+          " filas en grupos duplicados (",
         n_filas_duplicadas,
         if (identical(as.numeric(n_filas_duplicadas), 1)) " excedente)" else " excedentes)"
       ),
@@ -5641,26 +6209,73 @@
     cobertura <- rbind(cobertura, .nuevo_diagnostico_no_evaluado(
       "columnas_duplicadas", NA_character_,
       paste(
-        "No se compararon las columnas entre si porque la tabla no tiene",
-        "filas: dos columnas vacias coinciden sin que eso sea evidencia."
+        "No se compararon las columnas entre s\u00ed porque la tabla no tiene",
+        "filas: dos columnas vac\u00edas coinciden sin que eso sea evidencia."
       ),
       "Perfilar una tabla con al menos una fila para comparar contenidos."
     ))
   } else if (nrow(duplicadas)) {
-    for (i in seq_len(nrow(duplicadas))) {
-      hallazgos[[length(hallazgos) + 1L]] <- .nuevo_hallazgo(
-        duplicadas$columna_1[[i]], "columnas_duplicadas", "sospechoso",
+    # Un hallazgo por GRUPO de columnas iguales, como `filas_duplicadas` por
+    # sus filas: la igualdad es una equivalencia, y el grupo dice todo lo que
+    # decian sus pares. Con uno por par, k columnas iguales eran
+    # k (k - 1) / 2 hallazgos -499.500 con 1.000 columnas- y cada consumidor
+    # pagaba por ellos: el plan proponia eliminar la misma columna varias
+    # veces y fallaba al aplicarse, el informe desplazaba otros hallazgos fuera
+    # de sus filas y planificar se estimaba en un dia. `columna` es la primera
+    # del grupo en el orden de los datos, la que el plan conserva; la evidencia
+    # nombra a todas, y `n_afectados` las cuenta a todas, como las filas en
+    # grupos de `filas_duplicadas`. Con dos columnas la fila es la de siempre.
+    filas_grupo <- .filas_por_grupo_duplicadas(duplicadas, grupo_duplicadas)
+    primeras <- vapply(filas_grupo, function(f) f[[1L]], integer(1L))
+    n_miembros <- lengths(filas_grupo) + 1L
+    # El mismo `paste()` que armaba el par, para que con dos columnas el texto
+    # salga con los mismos bytes y la misma marca. Salvo que algun nombre no se
+    # pueda leer suelto entre los ` = `: ahi el grupo entero se cita, y un
+    # nombre que se repite en la tabla lleva ademas su posicion. Sin eso,
+    # `X = X` publicaba una igualdad sin decir de que columnas, y una columna
+    # llamada `A = B` igual a `C` se leia como un grupo de tres.
+    repetidos <- .nombres_repetidos_en_tabla(columnas)
+    miembros_texto <- vapply(filas_grupo, function(f) {
+      nombres_grupo <- c(
+        duplicadas_texto$columna_1[[f[[1L]]]], duplicadas_texto$columna_2[f]
+      )
+      posiciones <- .posiciones_grupo_duplicadas(
+        duplicadas, f, posiciones_duplicadas, columnas
+      )
+      repetido <- !is.na(posiciones) & repetidos[posiciones]
+      repetido[is.na(repetido)] <- FALSE
+      if (!any(repetido) &&
+          !any(.nombre_ambiguo_en_evidencia_duplicadas(nombres_grupo))) {
+        return(paste(nombres_grupo, collapse = " = "))
+      }
+      citados <- .citar_publicable(nombres_grupo)
+      citados[repetido] <- paste0(
+        citados[repetido], " (columna ", posiciones[repetido], ")"
+      )
+      paste(citados, collapse = " = ")
+    }, character(1L))
+    hallazgos[[length(hallazgos) + 1L]] <- .nuevo_hallazgo(
+      duplicadas$columna_1[primeras], "columnas_duplicadas", "sospechoso",
+      ifelse(
+        n_miembros == 2L,
         "Dos columnas tienen el mismo contenido.",
         paste0(
-          duplicadas_texto$columna_1[[i]], " = ",
-          duplicadas_texto$columna_2[[i]],
-          "; comparadas sobre ", nrow(datos),
-          if (nrow(datos) == 1L) " fila" else " filas"
-        ),
+          .formatear_numero_publicado(n_miembros),
+          " columnas tienen el mismo contenido."
+        )
+      ),
+      paste0(
+        miembros_texto,
+        "; comparadas sobre ", nrow(datos),
+        if (nrow(datos) == 1L) " fila" else " filas"
+      ),
+      ifelse(
+        n_miembros == 2L,
         "Confirmar si ambas columnas son necesarias o si existe redundancia.",
-        ncol(datos), 2, "columna"
-      )
-    }
+        "Confirmar si todas las columnas son necesarias o si existe redundancia."
+      ),
+      ncol(datos), n_miembros, "columna"
+    )
   }
   nombres_problematicos <- .nombres_columnas_problematicos(nombres_texto)
   if (nrow(nombres_problematicos)) {
@@ -5678,22 +6293,22 @@
       NA_character_, "nombres_columnas_problematicos", "sospechoso",
       if (hay_codificacion_invalida) {
         paste(
-          "La tabla contiene nombres de columna no sintacticos o duplicados",
-          "y al menos uno tiene bytes cuya codificacion no se pudo establecer."
+          "La tabla contiene nombres de columna no sint\u00e1cticos o duplicados",
+          "y al menos uno tiene bytes cuya codificaci\u00f3n no se pudo establecer."
         )
       } else {
-        "La tabla contiene nombres de columna no sintacticos o duplicados."
+        "La tabla contiene nombres de columna no sint\u00e1cticos o duplicados."
       },
       evidencia,
       if (hay_codificacion_invalida) {
         paste(
-          "Volver a leer la fuente declarando su codificacion, por ejemplo",
-          "con `fileEncoding = \"ISO-8859-1\"`, o renombrar despues de",
-          "confirmar los bytes. No se adivino el caracter: el perfil solo uso",
+          "Volver a leer la fuente declarando su codificaci\u00f3n, por ejemplo",
+          "con `fileEncoding = \"ISO-8859-1\"`, o renombrar despu\u00e9s de",
+          "confirmar los bytes. No se adivin\u00f3 el car\u00e1cter: el perfil s\u00f3lo us\u00f3",
           "una clave operativa UTF-8 y conserva el nombre original."
         )
       } else {
-        "Renombrar las columnas con nombres sintacticos, unicos y sin espacios al borde."
+        "Renombrar las columnas con nombres sint\u00e1cticos, \u00fanicos y sin espacios al borde."
       },
       ncol(datos), nrow(nombres_problematicos), "columna"
     )
@@ -5723,7 +6338,7 @@
         " sin comparar por el presupuesto de ",
         fechas_partidas$alcance$max_candidatos, "."
       ),
-      "Reducir las columnas candidatas, o solicitar una regla de fecha explicita por nombre y rol."
+      "Reducir las columnas candidatas, o solicitar una regla de fecha expl\u00edcita por nombre y rol."
     ))
   }
   if (length(relaciones_orden)) {

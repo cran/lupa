@@ -120,9 +120,24 @@ ejemplo, antes de \code{ANALYZE}— o hay ambigüedad, la métrica queda
 (por omisión) o \code{"aproximada_motor"}. La sonda prueba siempre primero una
 forma nativa exacta consolidada, luego una forma exacta por columna y deja
 las funciones nativas aproximadas para el final. Por eso esta opción
-describe la estrategia habilitada, no garantiza el método ejecutado:
-\code{meta$estrategia_mediana} y \code{resumen_tabla$sql$metodo} publican el método
-que efectivamente corrió. Una mediana resuelta por una forma exacta queda
+describe la estrategia habilitada, no garantiza el método ejecutado. El
+método que efectivamente corrió está en \code{resumen_tabla$sql$metodo}, en la
+fila de \code{metrica = "mediana"} de cada columna, y es la única fuente por
+columna. \code{meta$estrategia_mediana} publica la resolución de la tabla:
+lo pedido (\code{estrategia_solicitada}), la forma que el motor aceptó para la
+tabla (\code{estrategia_resuelta}), su \code{estado} y su \code{motivo}. No es el método
+de cada columna: una columna que no puede usar esa forma —un \code{float8} de
+PostgreSQL, que la deja por la lectura exacta, o una columna con
+extremos— corre por otra (\code{dos_consultas} en la tabla completa, la CTE de
+ventanas en la muestra) y lo declara en su fila de \code{resumen_tabla$sql},
+aunque \code{meta$estrategia_mediana} siga nombrando la consolidada. El \code{estado}
+de \code{meta$estrategia_mediana} describe la forma, no la fila: en
+\code{universo = "muestra_motor"} la fila de cada columna queda \code{estimado}.
+Las columnas \code{estrategia_solicitada}, \code{estrategia_resuelta} y
+\code{estado_estrategia} de \code{resumen_tabla$sql} son las de \code{n_distintos}
+(\code{meta$estrategia_distintos}), repetidas en todas las filas: en la fila de
+la mediana no describen la mediana. Una mediana resuelta por una forma
+exacta queda
 \code{estado = "calculado"} y \code{error_esperado = "no_aplica"}, aunque se haya
 pedido \code{"aproximada_motor"}; sólo una aproximación ejecutada queda
 \code{estado = "estimado"}. \code{universo = "muestra_motor"} combinado con
@@ -147,7 +162,21 @@ el estado \code{no_solicitado} y \code{meta$bloques$filas_vistas = 0}. La segund
 opción no cambia el alcance de esos agregados: eso lo decide \code{universo}.}
 
 \item{max_consultas}{Presupuesto declarado de consultas. Al agotarse, las
-métricas restantes quedan en \code{no_disponible} con ese motivo.}
+métricas restantes quedan en \code{no_disponible} con ese motivo. Cuenta toda
+sentencia que el perfilado manda al motor —la preparación, las lecturas de
+catálogo, el recorrido por bloques y, por el spool de la muestra del
+motor, la preparación que la corrida repite para publicar su plan—, la
+misma cuenta de \code{\link[=plan_perfilado_dbi]{plan_perfilado_dbi()}} y de
+\code{resumen_tabla$meta$consultas$emitidas}. No cuentan las sentencias de la
+guarda de transacción (\code{SAVEPOINT} y, en SQL Server, la pregunta por la
+transacción abierta antes de cada consulta), ni las lecturas de
+\code{pg_stat_statements} de \code{instrumentar}, ni las que algunos controladores
+mandan para contestar \code{DBI::dbGetInfo()} o \code{DBI::dbIsValid()}: duckdb 1.1
+pregunta su versión y manda \verb{SELECT 1}, una o dos veces por corrida. La
+preparación y el recorrido por
+bloques se cuentan pero no se omiten: sin ellos no hay perfil. Con
+\code{max_consultas = attr(plan, "total_maximo")} ninguna métrica queda afuera
+por el presupuesto.}
 
 \item{dialecto}{Capacidad de acotar filas: \code{"auto"} la sondea, y
 \code{"limit"}, \code{"top"}, \code{"fetch_first"}, \code{"rownum"} o \code{"portable"} la
@@ -157,7 +186,9 @@ declaran sin sondeo.}
 las consultas de moda, extremos y mediana, y se limpian esos campos en el
 resumen, la muestra, los bloques, la cobertura y los motivos; también se
 retiran ejemplos de patrones, familias de acumuladores y cualquier muestra
-cruda. Los conteos, proporciones y agregados que no son valores de celda
+cruda. El mensaje de un error del motor, que cita la celda que lo provocó,
+se publica sin sus literales, como con \code{proteger_datos_personales = TRUE}.
+Los conteos, proporciones y agregados que no son valores de celda
 pueden seguir publicándose. La elección queda en
 \code{resumen_tabla$meta$incluir_valores} y \code{perfil_muestra$meta}.}
 
@@ -167,7 +198,9 @@ familias. Para control separado, usar \code{tamano_lote_planos} y
 \code{tamano_lote_distintos}.}
 
 \item{tamano_lote_planos}{Cantidad máxima de columnas por consulta de
-agregados planos. El valor por omisión es 20.}
+agregados planos. En SQL Server y en columnas \code{float8} de PostgreSQL, el
+desvío conserva su cálculo centrado en una segunda pasada del mismo tamaño.
+El valor por omisión es 20.}
 
 \item{tamano_lote_distintos}{Cantidad máxima de columnas por consulta de
 cardinalidades exactas. El valor por omisión es 2, un supuesto del código
@@ -261,12 +294,17 @@ filas por columnas del esquema. Si reduce la muestra,
 \code{Inf} desactiva este tope. No modifica los agregados SQL.}
 
 \item{max_bytes_muestra}{Máximo de bytes de la muestra materializada que
-alimenta \code{perfil_muestra}. Por defecto es \verb{512 MiB}. Como el tamaño no se
-conoce desde el esquema, primero se lee una sonda de hasta cien filas y con
-ella se fija el límite final en SQL o en \code{dbFetch(n)}, antes de leer el
-resto. Si reduce la muestra, \code{cobertura_diagnosticos} informa los bytes
-observados, el umbral y cuál tope mandó. \code{Inf} desactiva este tope. No
-modifica los agregados SQL.}
+alimenta \code{perfil_muestra}. Por defecto es \verb{512 MiB}. En
+\code{muestra_motor}, el límite se cruza con el presupuesto de materialización
+y se respeta antes de cada \code{dbFetch(n)}: cuando la cota de tipos es
+demasiado conservadora se lee una fila inicial, se mide lo que ocupa en la
+materialización y los bloques siguientes se piden con el doble de margen
+sobre la fila más grande medida; el spool nunca pasa el tope. Si reduce la muestra, \code{meta$muestreo},
+\code{meta$materializacion} y \code{cobertura_diagnosticos} informan las filas
+solicitadas, efectivas y cuál tope mandó. \code{meta$muestreo$filas_por_bytes}
+publica la cantidad obtenida de la medicion y
+\code{meta$muestreo$filas_por_bytes_fuente} lo declara. \code{Inf} desactiva este
+tope. No modifica los agregados SQL.}
 
 \item{bloque_filas}{Entero positivo que activa el recorrido de
 \code{tabla_completa} por bloques. Se abre un unico result set con
@@ -274,10 +312,14 @@ modifica los agregados SQL.}
 de liberar la entrada; \code{NULL} conserva la via existente. El resultado
 publica \code{meta$alcance$orden}, \code{meta$bloques}, \code{meta$bytes} y los eventos del
 vigilante. Los drivers sin retencion incremental demostrada (incluido
-DuckDB en esta matriz) quedan \code{no_disponible} con su motivo, sin caer en
-\code{dbGetQuery()}. Si se pide \code{moda} o \code{mediana}, la lectura por bloques inicia tambien el mapa
+DuckDB en esta matriz) quedan \code{no_disponible} con su motivo y un aviso
+\code{lupa_aviso_muestra_motor}, sin caer en \code{dbGetQuery()}. Si se pide \code{moda} o \code{mediana}, la lectura por bloques inicia tambien el mapa
 central de distintos aunque \code{n_distintos} no se haya pedido: la mediana
 depende de ese mapa y la fila \code{n_distintos} conserva \code{no_solicitado}.
+Las columnas binarias compatibles se solicitan en la misma forma que la
+muestra, \code{largo:md5}, para que R no materialice los bytes crudos; los
+largos que se publican se reconstruyen desde el prefijo y son los largos
+originales, no el largo de esa cadena.
 Bajo \code{bloque_filas}, \code{perfil_muestra} sigue siendo la muestra diagnóstica
 acotada por \code{muestra}, \code{max_celdas_muestra} y \code{max_bytes_muestra}; su
 \code{general$filas} no es la cobertura, que se publica en
@@ -289,14 +331,19 @@ privacidad ni como \code{no_solicitado}.}
 
 \item{max_bytes_procesamiento}{Límite de bytes del estado retenido por el
 procesamiento por bloques y por la lectura del spool en R. Se comprueba
-antes de publicar un bloque o una pasada; \code{Inf} desactiva este límite.}
+antes de publicar un bloque o una pasada; si la materialización cabe pero
+el objeto que R necesita para perfilarla supera el límite, el perfil se
+descarta y se emite el mismo aviso de alcance degradado, con
+\code{tope_que_mando = "procesamiento"}. \code{Inf} desactiva este límite.}
 
 \item{max_bytes_materializacion}{Presupuesto de bytes del spool externo de
 \code{muestra_motor}. Se mide por chunk antes de cada escritura, dejando espacio
 para el trailer; si no alcanza, se publica
-\code{spool_presupuesto_excedido} y
-\code{muestra_inestable:presupuesto_materializacion} sin mezclar una muestra
-parcial con resultados completos. \code{Inf} desactiva este límite.}
+\code{spool_presupuesto_excedido} y se conserva la parte que entró como muestra
+recortada, con \code{muestra_inestable:presupuesto_materializacion}. En
+\code{muestra_motor}, el primer bloque se acota antes de pedirlo y los siguientes
+se adaptan a los bytes medidos; el resultado conserva
+\code{meta$bytes_muestra} y \code{meta$tiempos}. \code{Inf} desactiva este límite.}
 
 \item{columnas_opcionales}{Nombres de columnas que sólo son aplicables a
 parte de las filas. Esta política se aplica al \code{perfil_muestra}; el
@@ -356,6 +403,14 @@ clave primaria: \code{columnas}, \code{fuente}, \code{motivo}, \code{garantia} y
 expone, \code{visible}, \code{restriccion_diferible},
 \code{universo_incluye_descendientes} e \code{indice_no_unico}. Una consulta fallida
 queda diferenciada de una clave no declarada.
+En \code{muestra_motor}, \code{resumen_tabla$tiempos} incluye materialización,
+lectura del spool y perfilado local; \code{perfil_muestra$meta$bytes_muestra}
+conserva los bytes del spool. \code{meta$muestreo$reintentos} y
+\code{meta$muestreo$metodo_inicial} describen la recuperación de una muestra
+corta. En \code{muestra_motor} o bajo \code{bloque_filas}, las columnas binarias de
+motores compatibles se representan como
+\code{largo:md5} durante la lectura y el perfil publica sus largos originales;
+el contenido no se conserva.
 }
 \description{
 Calcula en SQL un resumen sobre la tabla completa o sobre una relación
@@ -376,6 +431,54 @@ dependencia opcional. Cada agregado no disponible queda en \code{NA} y su
 consulta, estado y motivo se conservan en \code{resumen_tabla$sql}.
 Las expresiones se ejecutan como capacidades a comprobar, no como un
 dialecto SQL universal.
+
+En \code{muestra_motor}, \code{max_celdas_muestra} y \code{max_bytes_muestra} se aplican
+antes de armar la selección y se publican como filas pedidas y filas
+efectivas. El spool estima bytes por fila desde el catálogo cuando el motor
+lo permite; si la estimación no existe, comienza con un bloque pequeño y lo
+adapta. La materialización publica la fuente, la estimación, el recorte y el
+presupuesto efectivo en \code{meta$materializacion}. Un recorte, un muestreo corto
+de \code{TABLESAMPLE} o una falla de una consulta emiten la clase
+\code{lupa_aviso_muestra_motor}, que se puede capturar o silenciar por clase.
+Las columnas binarias compatibles se leen como largo y resumen MD5, por lo
+que se conservan faltantes, duplicados y largos sin traer el contenido a R.
+En SQL Server anterior a 13, o si la versión no se pudo determinar, el MD5
+usa un prefijo de 8000 bytes y conserva el largo completo; esta decisión
+queda en la metadata de \code{perfil_muestra} y también convierte \code{image} a
+\code{varbinary(max)} antes de resumirla.
+Si \code{TABLESAMPLE} entrega menos de la mitad de las filas efectivas, se hace
+un solo reintento con una fracción mayor. PostgreSQL prefiere
+\verb{TABLESAMPLE BERNOULLI}; en los demás motores se conserva el método por
+bloques y, solo si no existe, se considera el orden pseudoaleatorio sujeto a
+la misma guarda de costo. La metadata publica ambos métodos, la cantidad de
+reintentos, la guarda y cuál spool quedó elegido: una falla o una muestra más
+corta en el segundo intento conserva la primera muestra válida.
+
+Las fallas de consultas solicitadas se conservan en
+\code{resumen_tabla$meta$consultas$fallas}, con \code{etapa}, \code{consulta_id},
+\code{sqlstate}, \code{tipo} y \code{motivo}. Un \code{SQLSTATE} \code{57014} se publica como
+\code{cancelada}; los rechazos tienen \code{tipo = "rechazada"}. Las etapas internas
+\code{clave_primaria}, \code{proteccion_coleccion}, \code{sonda_collation_dbi},
+\code{sonda_fuente_bloques}, \code{sonda_desvio}, \code{estimacion_derrame}, \code{explain_moda},
+\code{sonda_muestreo}, \code{sonda_mediana_escalar}, \code{sonda_mediana_cte_ventana},
+\code{sonda_mediana_cte_ventana_control_negativo}, \code{sonda_moda_guardian},
+\code{sonda_mediana_consolidada}, \code{sonda_aproximacion}, \code{sonda_dialecto},
+\code{consulta}, \code{cardinalidad_catalogo}, \code{tipos_guardados}, \code{sonda_infinitos},
+\code{sonda_magnitud}, \code{esquema}, \code{sonda_lectura_muestra}, \code{sonda_bytes_muestra},
+\code{proteccion_fuera_de_muestra}, \code{porton_tabla} y
+\code{catalogo_bytes_muestra} se conservan aparte en
+\code{resumen_tabla$meta$consultas$sondas_fallidas} y no disparan el aviso de
+degradacion. El aviso que informa que la muestra no esta disponible conserva
+ademas la clase historica \code{lupa_muestra_dbi_no_disponible}.
+
+Cuando el catálogo estima al menos \code{1e8} filas y se pidió
+\code{universo = "tabla_completa"}, la función avisa antes de los agregados con
+la clase \code{lupa_aviso_costo_dbi} y sugiere usar
+\code{universo = "muestra_motor"}. El umbral se llama
+\code{.UMBRAL_FILAS_AVISO_AGREGADOS_DBI} y no afecta tablas menores ni la vía de
+muestra. La consulta de ese aviso es interna y no consume el presupuesto de
+\code{max_consultas}, para que el aviso no cambie qué métricas entran en la
+corrida.
 }
 \section{Dos tablas se llaman cobertura}{
 
@@ -395,11 +498,28 @@ la palabra y no el vocabulario, así que conviene mirar cuál se está leyendo.
 Si una columna declarada como entero de 64 bits o mas ancho, o como decimal
 -\code{numeric}, \code{decimal}, con o sin precision-, llega como doble
 y contiene un valor con valor absoluto de al menos 2^53, \code{resumen_tabla}
-deja sus metricas de magnitud en \code{no_disponible}. \strong{Las siete}: \code{minimo},
-\code{maximo}, \code{media}, \code{n_ceros}, \code{n_negativos}, \code{mediana} y \code{desvio}. La condicion
-es de la columna y no de la metrica, aunque las dos ultimas se calculen en otras
-consultas; lo que el motor cuenta con exactitud -\code{n_distintos}, la moda- se sigue
-publicando. Lo decide el valor: un decimal desde 2^53 ya no cabe en un doble
+deja en \code{no_disponible} las métricas de magnitud que dependen de un valor que
+el doble no representa: \code{minimo}, \code{maximo}, \code{media}, \code{n_ceros}, \code{n_negativos}
+y \code{desvio}, por la columna. La \code{mediana} depende sólo de sus centrales y se
+decide por su valor: con una cantidad impar de valores es la central, y se
+publica si queda por debajo de 2^53 —una central de al menos 2^53 daría un
+doble de al menos 2^53—; con una cantidad par promedia dos centrales y su
+valor no dice si alguna pasó de 2^53: se publica sólo si las dos quedan
+entre -2^52 y 2^52, lo que en la tabla completa cuenta una consulta más
+(cuántos valores llegan a 2^52 y cuántos bajan de -2^52) y en la muestra del
+motor no se puede saber. La misma regla
+corre cuando la consulta de básicos desborda (un \code{HUGEINT} cerca de su tope en
+DuckDB): la consulta se repite sin el promedio, la media queda \code{no_disponible}
+con su motivo, y el mínimo, el máximo y los conteos se juzgan como en
+cualquier otra columna. En una columna que no pasa de 2^53, la mediana de una cantidad par
+tampoco se publica en PostgreSQL si sus extremos distan más de 2^53:
+\code{PERCENTILE_CONT} interpola \code{bajo + (alto - bajo) * 0.5} en doble y esa resta
+redondea. La de un \code{numeric} no pasa por ahí: es la suma de sus centrales.
+Lo que el motor cuenta con exactitud -\code{n_distintos}, la moda- se
+sigue publicando. La moda de un entero ancho que llego como \code{numeric} se pide al
+motor como texto exacto cuando la magnitud cruza 2^53; un \code{BIGINT} con
+valores chicos conserva la moda numerica de siempre. Lo decide el valor: un
+decimal desde 2^53 ya no cabe en un doble
 -90071992547409001 y 90071992547409002 son el mismo-, y el tipo solo dice
 que viene de un decimal: RPostgres lo publica como \code{numeric} sin precision y
 odbc con su codigo ODBC (2 y 3), asi que una regla que esperara
@@ -408,18 +528,30 @@ seleccion SQL trae esas columnas como texto y, si \code{bit64} esta instalado,
 las convierte a \code{integer64} antes de perfilar: \code{n_distintos}, la moda y los
 diagnosticos por identidad conservan los valores exactos. Los estadisticos
 de magnitud por encima de 2^53 siguen usando
-\code{estado_resumen_cuantitativo = "omitidos_precision"}, como en memoria. Si
+\code{estado_resumen_cuantitativo = "omitidos_precision"}, como en memoria, y la
+mediana se publica cuando sus una o dos centrales caben en un doble, como en
+\code{\link[=perfilar]{perfilar()}}. Un decimal entero que la muestra convirtió a \code{integer64} se
+resume como tal. En SQL Server el texto de un decimal de 38 cifras se pide
+como \code{VARCHAR(48)} —\code{VARCHAR} a secas es \code{VARCHAR(30)}, y la lectura de la
+muestra entera abortaba— y el de \code{money} con sus cuatro decimales. Si
 falta \code{bit64}, la columna queda como texto y \code{cobertura_diagnosticos} explica
 la limitacion y recomienda instalarlo o pedir \code{integer64} al conectar. Las
 columnas declaradas como \code{double}, \code{real} o \code{float} no entran en esta guarda.
 Con \code{bloque_filas} rige la misma regla, sobre los valores que el
 controlador entrega como \code{integer64} —un \code{BIGINT} o \code{bigserial} de
 PostgreSQL, un \code{INTEGER} de SQLite que no entra en 32 bits—: por debajo de
-2^53 se opera con el valor exacto, y desde 2^53 las siete métricas quedan
-\code{no_disponible} con su motivo. Un decimal o un entero ancho que llega como
-doble desde 2^53 deja ademas \code{n_distintos}, \code{tasa_distintos}, la moda y su
-frecuencia en \code{no_disponible}: con bloques se contarian en R sobre esos
-dobles, que no distinguen los valores. Las cifras de \code{perfil_muestra} de esa
+2^53 se opera con el valor exacto, y desde 2^53 las seis que dependen de toda
+la columna quedan \code{no_disponible} con su motivo y la mediana se decide por su
+valor, como en el resumen SQL. Un bloque que el controlador entrega como \code{integer}
+y otro como \code{integer64} —RSQLite elige la clase por los valores de cada
+bloque— se unen como \code{integer64} antes de contar distintos, moda y mediana. Un decimal o un entero ancho que llega como
+doble desde 2^53 deja ademas \code{n_distintos} y \code{tasa_distintos} en
+\code{no_disponible}: con bloques se contarian en R sobre esos dobles, que no
+distinguen los valores. La moda de un decimal, y la de un entero ancho
+entregado como \code{numeric}, se le pide al motor como texto exacto en las tres
+vias, en PostgreSQL, SQL Server, MySQL, MariaDB y DuckDB; si la via o el
+adaptador no puede construir esa forma, queda \code{no_disponible} con su motivo.
+Las cifras de \code{perfil_muestra} de esa
 columna salen de los mismos dobles; sin bloques, la corroboracion avisa la
 diferencia en \code{n_distintos} y la moda contra las del motor. Un decimal por
 debajo de 2^53 con mas cifras de las que guarda un doble -\code{numeric(30,20)}-
@@ -429,7 +561,9 @@ de la tabla: \code{minimo}, \code{maximo}, \code{media}, \code{mediana} y \code{
 Cuando \code{incluir_valores = FALSE}, la promesa de privacidad alcanza las tres
 vias de salida: resumen SQL, \code{perfil_muestra} y \code{bloque_filas}. Se omiten los
 valores de celda -incluidos moda, extremos, medianas, centinelas y ejemplos
-de patrones-, se limpian cobertura y motivos, y no se conservan familias de
+de patrones-, se limpian la cobertura y los motivos de las metricas que
+publicarian un valor de celda (los de un estadistico como la media o el
+desvio se conservan: no contienen valores), y no se conservan familias de
 acumuladores ni una muestra cruda en el resultado. La limpieza recorre también
 los atributos de cada hoja del resultado, incluidos los resúmenes de patrones.
 Los conteos, proporciones y agregados que no son valores de celda pueden seguir
@@ -549,10 +683,10 @@ Los \code{stop()} de esta vía llevan clase de condición propia —todas hereda
 \code{lupa_error_conteo_dbi}, \code{lupa_error_esquema_dbi},
 \code{lupa_error_codificacion_dbi}, \code{lupa_error_argumento_dbi},
 \code{lupa_error_transaccion_dbi} y \code{lupa_error_integer64}. La última sale cuando
-la lectura por bloques recibe una columna \code{integer64} con un \code{bit64}
-anterior a 4.6.0: sin el método \code{mtfrm.integer64}, \code{match()} de R iguala
-entre sí todos los valores negativos. Sin bloques, los agregados que calcula
-el motor se devuelven y la muestra no, con un aviso que dice por qué.
+la lectura por bloques recibe una columna \code{integer64} y \code{bit64} no está
+instalado: sin él R iguala entre sí todos los valores negativos. Sin bloques,
+los agregados que calcula el motor se devuelven y la muestra no, con un aviso
+que dice por qué. Alcanza \code{bit64} 4.0.5 o posterior.
 }
 
 \section{Dentro de una transacción}{
@@ -597,6 +731,10 @@ convierte un texto sucio— la deja abortada, y hay que cerrarla con
 usa \code{TABLESAMPLE} cuando el motor lo acepta, o una función pseudoaleatoria con
 el límite del dialecto. Si ninguna forma es compatible, las métricas SQL
 quedan en \code{no_disponible}: no se sustituyen por resultados de la tabla completa.
+La estimación de bytes de SQL Server usa \code{sys.partitions} y
+\code{sys.allocation_units}, que no requieren \verb{VIEW DATABASE STATE} para una
+tabla accesible al usuario. Si el catálogo no se puede leer, esa consulta interna
+queda en la metadata sin convertirse en una falla de consulta solicitada.
 Cada registro publica \code{alcance}, \code{universo}, \code{tamano_muestra}, \code{fraccion},
 \code{metodo} y \code{error_esperado}. En \code{resumen_tabla$meta$muestreo},
 \code{tamano_muestra} conserva el nombre historico y declara el tamano efectivo
@@ -604,7 +742,12 @@ solicitado a la consulta; \code{filas_solicitadas} y \code{filas_pedidas} declar
 pedido original y \code{filas_obtenidas} las filas que devolvio el spool. La
 materializacion publica \code{muestra_id}, \code{snapshot_id}, \code{orden_id}, \code{n_filas},
 \code{bytes}, \code{checksum}, backend, version y presupuesto en
-\code{meta$materializacion}; las pasadas publican el mismo \code{muestra_id}.
+\code{meta$materializacion}; las pasadas publican el mismo \code{muestra_id}. También
+publica la estimación de bytes por fila del catálogo, los bytes medidos,
+la fracción real materializada y \code{tope_que_mando} cuando un tope recortó la
+copia. La estimación sólo fija el primer bloque: el tamaño medido gobierna
+los siguientes y la parte que entra se conserva cuando el presupuesto se
+agota.
 El contrato de \code{perfil_muestra} es campo por campo: \code{meta$filas_analizadas}
 es la cantidad efectivamente entregada a los diagnósticos; \code{hallazgos} solo
 contiene familias disponibles; y \code{cobertura_diagnosticos} tiene una fila por
@@ -640,15 +783,39 @@ si la politica de costo conserva \code{n_total}, la proyeccion, la tasa y sus
 tres umbrales; si no, la mediana queda \code{no_disponible} con
 \code{capacidad_no_aceptada:newid_costo_excede_presupuesto} aunque se silencien
 los avisos.
-Si la consulta de la muestra devuelve cero filas, no hay base para medir las
-metricas de alcance \code{muestra}: se publican con valor \code{NA}, estado
-\code{no_disponible} y el motivo estable
-\code{muestra_vacia:random_limit_sin_filas} (o el metodo efectivo equivalente).
-Esto no permite concluir que
-la columna este vacia, por lo que no se publica cero ni se dispara la
-cascada \code{sin_valores}. Una muestra no vacia sin valores validos usa
-\code{muestra_inestable:sin_valores_validos}; una capacidad no aceptada usa
-\code{capacidad_no_aceptada:...}. \code{n} conserva el conteo de la tabla completa.
+Si \code{TABLESAMPLE} devuelve cero o menos de la mitad de las filas pedidas, se
+intenta una vez con una forma de muestreo más amplia. Si el reintento logra
+una muestra suficiente, se conservan en \code{meta$muestreo} ambos métodos y no
+se emite un aviso por la escasez transitoria. Si la muestra final sigue
+corta, se publica el aviso y las métricas de alcance quedan con el estado
+correspondiente. Un \code{random_limit} que devuelve cero conserva el motivo
+\code{muestra_vacia:random_limit_sin_filas} (o el método efectivo equivalente).
+Esto no permite concluir que la columna esté vacía, por lo que no se publica
+cero ni se dispara la cascada \code{sin_valores}. Una muestra no vacía sin valores
+válidos usa \code{muestra_inestable:sin_valores_validos}; una capacidad no aceptada
+usa \code{capacidad_no_aceptada:...}. \code{n} conserva el conteo de la tabla completa.
+
+Con \code{bloque_muestra = "solo_agregados"} cada sentencia sobre la muestra del
+motor sortea la suya. Lo que decide los agregados de una columna -la cuenta
+de sus valores, su magnitud, la media y el desvío- sale del lote de
+agregados, una sola sentencia: si la magnitud pide la media o el desvío
+escalados (valores de más de \code{1e150} o de menos de \code{1e-150} en valor
+absoluto), no se recalculan en otra consulta, que sortearía otra muestra, y
+quedan \code{no_disponible} con su motivo. La moda, la mediana y los distintos se
+calculan cada uno en su sentencia, sobre su propia muestra; las cotas de la
+moda y de los distintos se comprueban dentro de esa sentencia (ver el
+\code{consulta_id}). Con \code{"con_muestra"} todo sale de la única muestra
+materializada en el spool.
+
+Un estado que afirma un valor (\code{calculado}, \code{estimado}, \code{observado_muestra})
+nunca se publica con el valor ausente. Si el valor falta, el registro dice
+por qué: \code{sin_valores} cuando la columna no tiene valores no nulos en la
+tabla completa (en la muestra, \code{no_disponible} con
+\code{muestra_inestable:sin_valores_validos}); \code{no_aplica} para una métrica
+numérica sobre una columna que no lo es, para el desvío con menos de dos
+valores y para la moda cuando ningún valor de la tabla se repite;
+\code{no_disponible} en cualquier otro caso, también la moda de una muestra sin
+repetidos, porque la tabla puede tenerla.
 
 En una muestra, \code{error_esperado} vale \code{no_estimado} para metricas cuyo error
 podria calcularse bajo un plan probabilistico pero no se calculo,
@@ -695,14 +862,22 @@ materializacion cliente, pero solo se publica evidencia positiva de snapshot
 transaccional cuando el adaptador la demuestra. La cobertura agrega una entrada concreta solo si
 \code{n_validos} y \code{n_distintos} son exactos, incoherentes y provienen de grupos
 distintos; su motivo conserva ambas sentencias.
-La mediana muestral que no tiene una forma consolidada o escalar usa una
-sola CTE con \verb{COUNT(*) OVER ()}, \verb{ROW_NUMBER() OVER} y el promedio de las
-posiciones centrales. La sonda barata repite esa construccion sobre
-\verb{VALUES (1.0), (2.0), (3.0), (4.0)}, exige \code{2.5} y un control negativo que
+La mediana muestral que no tiene una forma consolidada o escalar, y la de
+cada columna que no puede usar la consolidada (un decimal, un \code{float8} de
+PostgreSQL o una columna con extremos), usa una sola CTE con
+\verb{COUNT(*) OVER ()},
+\verb{ROW_NUMBER() OVER} y el promedio de las posiciones centrales, elegidas sin
+dividir; con extremos, el promedio no desborda y sigue en la misma
+sentencia. La sonda barata repite esa construccion sobre
+\verb{SELECT 1.0 UNION ALL ... SELECT 4.0}, exige \code{2.5} y un control negativo que
 falle; no se sondea la tabla de produccion. Si esa capacidad falla, la
 mediana se publica como \code{no_disponible} con
 \code{capacidad_no_aceptada:sonda_mediana_cte_ventana}, nunca como
-\code{dos_consultas} bajo \code{muestra_motor}.
+\code{dos_consultas} bajo \code{muestra_motor}. Si la preparación no la probó —porque
+hay mediana consolidada— y una columna decimal o un \code{float8} de PostgreSQL la
+van a necesitar, \code{\link[=plan_perfilado_dbi]{plan_perfilado_dbi()}} cuenta esa prueba y su control
+negativo entre los portones; la que deja la consolidada por sus extremos
+depende de los datos y no se anticipa.
 
 Las cotas de error no documentadas de una aproximacion nativa quedan como
 \code{"desconocido"}. Una aproximacion solo se consolida cuando entrega una
@@ -747,13 +922,44 @@ PostgreSQL se usan \verb{\%} y \code{/} con division entera. Bajo
 CTE de ventanas descrita arriba y no degradan a \code{dos_consultas}. En
 \code{tabla_completa} se conserva el camino previo, incluido \code{dos_consultas} si
 es el que resuelve ese dialecto; \code{PERCENTILE_CONT} no cambia.
+\code{dos_consultas} necesita el conteo de valores no nulos para el salto: si
+\code{metricas} no incluye \code{"validos"}, la mediana lo cuenta en una consulta
+propia y sale igual que con todas las métricas.
 La mediana consolidada tambien se sondea antes de usarla; en SQL Server
 requiere nivel de compatibilidad >= 110. Se sondea; estos son los motivos
-conocidos de que no se active: la funcion no esta disponible o el motor
-rechaza la sonda. En ese caso el mensaje del motor queda en
+conocidos de que no se active: la funcion no esta disponible, el motor
+rechaza la sonda o devuelve el percentil sin todas sus cifras. La prueba lee
+una fila con un valor de más de 1e8 y otro de menos de 1e-10 y exige los dos
+idénticos: MariaDB tipa \code{PERCENTILE_CONT} como \code{double(18,10)}, que satura
+en 1e8 y redondea a diez decimales, y por eso usa la mediana por columna
+como MySQL. En ese caso el mensaje del motor queda en
 \code{meta$mediana_consolidada$motivo} —sin sus literales con la protección
 activa, entero sin ella, como todo mensaje del motor: ver «Datos
 personales»—, y se conserva la mediana por columna.
+La mediana de un decimal no entra en la consolidada: en MySQL, MariaDB, SQL
+Server, PostgreSQL y DuckDB se piden, en el tipo de la columna, la suma de
+sus una o dos filas centrales y cuántas son, y R divide: es el doble más
+cercano de la mediana exacta, por la tabla completa y por la muestra del
+motor. Cuesta una consulta por columna decimal, que el plan cuenta.
+Con \code{bloque_filas} y en el resumen de la muestra del motor con
+\code{bloque_muestra = "con_muestra"} (el spool), la mediana de un decimal que el
+controlador entrega como doble también es la del decimal: por bloques, con
+una cantidad impar la central es un valor y su doble es el más cercano, y con
+dos centrales que caen en el mismo doble la mediana cae en él; con dos
+centrales distintas se le piden al motor como texto, con el mismo salto que
+la vía de dos consultas —una consulta ordenada por columna—, y R las suma.
+\code{money} de SQL Server se pide siempre, porque odbc no lo lee al doble más
+cercano. El spool ya trae cada decimal como texto y la calcula de ahí.
+\code{PERCENTILE_CONT} interpola en doble, y la de un decimal quedaba a un ulp
+del doble más cercano (la de 0,10 y 0,20 daba 0,15000000000000002, el
+promedio de los dobles); en DuckDB, además, interpola un \code{DECIMAL} en su
+propia escala y trunca, y convierte a doble un decimal de más de 18 cifras
+sin dar el más cercano: ahí la suma se lee por su texto. \code{AVG(x * 1.0)}
+necesita una cifra de escala más que la columna y en la escala máxima del
+motor —30 en MySQL, 38 en MariaDB— se recortaba (la mediana de 1e-30 y 2e-30
+salía 2e-30). La
+mediana consolidada de las demás columnas numéricas interpola en doble y
+puede quedar a una unidad de la última cifra del doble más cercano.
 }
 
 \section{Lo que el motor guarda distinto que R}{
@@ -839,9 +1045,10 @@ el valor recibido: la corroboración lo deja como divergencia de una fecha,
 no como diferencia de cotejamiento. Para conservar el desplazamiento hay
 que leer la columna como texto o normalizarla en la consulta de origen.
 \item \strong{Extremos y equivalencia entre motores.} SQL Server puede desbordar al
-agregar un \code{float} que contiene \code{-DBL_MAX} o \code{+DBL_MAX}; en ese caso sus
-métricas de magnitud quedan \code{no_disponible} con el mensaje del motor,
-aunque la muestra conserve el valor. El mismo \code{real} puede mostrar una
+agregar un \code{float} que contiene \code{-DBL_MAX} o \code{+DBL_MAX}; en ese caso las
+métricas que desbordan quedan \code{no_disponible} con el mensaje del motor,
+aunque la muestra conserve el valor, y el desvío se recalcula escalado
+(ver «Magnitudes extremas»). El mismo \code{real} puede mostrar una
 última cifra distinta entre PostgreSQL y SQL Server porque RPostgres lee
 la forma decimal corta y FreeTDS/odbc entrega el \code{float32}; cada resumen
 es coherente con los valores que su controlador devolvió, pero la
@@ -859,12 +1066,82 @@ sesión por omisión, esa misma combinación hace desbordar el motor y el
 mínimo, el máximo, la media y el desvío quedan \code{no_disponible}, con el
 error del motor como motivo: se declara, no se calcula. Si una columna que
 conserva ambos extremos finitos hace desbordar la suma de cuadrados, el
-desvío puede quedar \code{Inf}: es una limitación aritmética declarada.
+desvío se recalcula escalado.
+\item \strong{Magnitudes extremas.} Cuando el mínimo y el máximo ya medidos dejan el
+mayor valor absoluto fuera de \verb{[1e-150, 1e150]} —donde los cuadrados
+desbordan o caen en subnormales y pierden cifras—, el desvío se le pide al
+motor sobre \code{x / 2^k}, centrado en la media de esos mismos valores, y se
+multiplica por \code{2^k}: escalar por una potencia de dos es exacto, y no
+cuesta una consulta para decidirlo. También se escala cuando el rango
+—el máximo menos el mínimo— es tan chico que sus cuadrados caerían en
+subnormales, y la magnitud se conoce aunque no se pidan los básicos ni se
+publiquen los valores. En MySQL, MariaDB y SQL Server la media de esas
+columnas sale igual, \code{AVG(x / 2^k) * 2^k}, porque la suma de \code{AVG()}
+desborda; la mediana de dos centrales enormes se promedia como
+\code{a / 2 + b / 2}; y por encima de \code{1e65} el centro va como doble, porque un
+\code{DECIMAL} tiene 65 cifras. Una columna constante da \code{0}. Si el motor no
+puede, la métrica queda \code{no_disponible} con su falla en
+\code{meta$consultas$fallas} y el aviso: no se publica \code{Inf} ni un \code{0} sobre
+valores distintos. \code{perfilar()} y \code{perfilar_dbi(..., bloque_filas = n)}
+suman los cuadrados sin error en una unidad que es potencia de dos —la que
+deja el mayor valor en 2^400— y que sube cuando llega un bloque que no
+cubre: el desvío es el doble más cercano también en esas magnitudes. Las columnas de magnitud común no cambian de consulta ni de cifra.
 \item \strong{La media en coma flotante.} Cada lado suma a su modo; sobre una columna
 que mezcla magnitudes muy distintas —\code{1e20} junto a \code{1}— las medias pueden
-diferir entre motores y con la de R, y ninguna es la exacta. La
-corroboración cruzada lo declara cuando compara las dos. La media y el
-desvío se le piden al motor como doble donde su aritmética decimal los
+diferir entre motores y con la de R. La media y el desvío de R
+—\code{\link[=perfilar]{perfilar()}}, \code{perfil_muestra} y \code{bloque_filas}— son los dobles más
+cercanos de la media y el desvío exactos de los dobles que leyó. La media
+y el desvío de un decimal que el controlador entrega como doble son los
+del decimal, los dobles más cercanos de los exactos, por la tabla
+completa, por \code{bloque_filas} y por la muestra del motor, con
+\code{bloque_muestra = "con_muestra"} y con \code{"solo_agregados"}. El motor suma en
+el tipo de la columna, y devuelve como texto, la columna y los cuadrados de
+sus diferencias con la media escrita en su escala —o de los valores, donde
+no hay media o las diferencias pasan de 38 cifras—, con expresiones
+elegidas para que no desborden ni redondeen con las cifras del tipo, las de
+los extremos y las filas: en SQL Server y duckdb la parte entera y la
+fracción por separado, porque la suma de un \code{decimal(38,30)} desborda; en
+duckdb el cuadrado con un factor de 19 cifras, que lo lleva a 128 bits —el
+de dos \code{DECIMAL(15,0)} desbordaba en 64—; y donde nada de eso entra, en
+trozos de nueve cifras. R divide y saca la raíz con aritmética entera, sin
+cancelación. La muestra leída en R hace lo mismo con el texto de cada
+valor. Por la tabla completa y bajo la muestra del motor las sumas van en
+la misma consulta que los demás agregados, sin consultas de más y, bajo la
+muestra, sobre las mismas filas; por bloques, en lotes de hasta
+\code{tamano_lote_planos} columnas, con las expresiones que acepta el motor
+(1.664 en PostgreSQL). Un lote que el motor rechaza se parte hasta aislar
+la columna, y las demás siguen. Entran con cualquier \code{metricas}, con
+\code{incluir_valores = FALSE} —la media es un literal que sale de los datos, y
+el SQL publicado la lleva tapada— y con valores de 2^53 o más; en
+PostgreSQL, \code{NaN} e \code{Infinity} quedan fuera, como en la media de la tabla
+completa. En duckdb la media y el desvío del motor de esas columnas se
+piden sobre el doble: \code{x * 1.0} de un \code{DECIMAL(38,30)} desborda. Las
+sumas reemplazan la media y el desvío del motor, que los
+calculaba en doble: en MySQL, MariaDB y SQL Server promediaba el doble de
+cada valor, y con valores que se cancelan la media salía lejos
+(\code{999999999999999.99}, \code{-999999999999999.98}, \code{0.01}, \code{0.02}, \code{0.03} y
+\code{-0.04} daban 0,00333 por 0,005); el desvío, y la media con escala 30,
+quedaban a un ulp. Si las sumas no llegan —el presupuesto, o el motor
+rechaza el lote aun con la columna sola—, por la tabla completa la del
+motor queda sólo si su
+error cabe en una parte en mil millones (el desvío, con la guarda de los
+dobles; la media, si \code{n} redondeos del mayor valor no pasan de esa parte de
+la media), y si no queda \code{no_disponible} con el motivo; por bloques, la
+media y el desvío quedan \code{no_disponible}, como si la suma del motor no es
+la de lo que leyeron los bloques. Sin escala declarada —un decimal que el
+catálogo no describe— el desvío por bloques sale de los dobles, con su
+guarda; la de una tabla temporal la leen el catálogo de \code{tempdb} en SQL
+Server y \verb{SHOW COLUMNS} en MySQL y MariaDB. La media y el desvío de una columna de coma flotante
+o entera que calcula el motor salen de su aritmética y no son, en general,
+el doble más cercano del
+exacto: medido sobre columnas de cuatro a nueve valores en los siete
+motores, por la tabla completa, la media quedó a uno o dos ulps en hasta 19
+de 112 columnas (SQL Server) y el desvío a un ulp en 6 a 11 de cada 21 a
+112; con más filas la diferencia puede crecer, y con valores que se
+cancelan, más: \code{1e20}, \code{1}, \code{-1e20} y \code{2} dan 0,5 por 0,75 en MySQL,
+MariaDB, SQL Server y duckdb. La corroboración cruzada la
+tolera hasta \code{1e-10} relativa y la declara cuando pasa de ahí. La media y
+el desvío se le piden al motor como doble donde su aritmética decimal los
 recortaría: en SQL Server \verb{AVG(CAST(x AS FLOAT))}, porque \code{AVG} de un
 \code{numeric} devuelve seis decimales, y en PostgreSQL
 \verb{STDDEV_SAMP(CAST(x AS DOUBLE PRECISION))}, porque sobre magnitudes
@@ -889,11 +1166,45 @@ desvío centrado se apartaría del de los valores guardados, así que se
 convierte a doble antes de restar; en SQL Server el centro de una
 columna de coma flotante va como literal \code{float}, que no tiene el tope de 38
 cifras de un decimal. Una columna decimal o entera resta en su tipo, que es
-exacto. Con \code{bloque_filas} los
-momentos se acumulan centrados. Bajo \code{muestra_motor} no se vuelve a pedir,
-porque otra consulta vería otras filas; ahí, como red en todas las vías, un
-desvío \code{0} sobre una columna con dos valores distintos —un mínimo menor que
-el máximo— es imposible y queda \code{no_disponible} con su motivo.
+exacto; en SQL Server, si la resta pasa de 38 cifras el motor recorta la
+escala y redondea, y un empate se redondearía hacia lados distintos según
+el signo, así que el centro de un decimal nunca termina en 5. Con
+\code{bloque_filas} los momentos se acumulan centrados, sobre los dobles que
+entrega el controlador. El desvío de un decimal sale de las sumas exactas
+del motor (ver «La media en coma flotante»): la resta con la media escrita
+en la escala de la columna es exacta (medido en SQL Server, con
+compatibilidad 160 y 100, y en MySQL hasta \code{decimal(38,30)} y
+\code{DECIMAL(65,30)}). Sin escala declarada en SQL Server, MySQL y MariaDB, el
+de los dobles: si es tan grande frente a su desvío que el redondeo de cada
+valor a doble puede moverlo más de una parte en mil millones
+(\verb{max |x| / desvio * 2^-53}) queda \code{no_disponible}, salvo que el tipo
+declare escala 0 —\code{numeric(18,0)}, \code{decimal(38,0)}— y los valores queden
+por debajo de 2^53: ahí los dobles son los valores. La escala la publican
+PostgreSQL, MySQL, MariaDB, DuckDB y el
+catálogo de SQL Server, también la de una tabla temporal. Bajo
+\code{muestra_motor}, la media y el desvío
+se piden en la misma consulta, sobre las mismas filas de una sola
+evaluación de la muestra: una relación derivada calcula la media de esas
+filas con una ventana (\verb{AVG(x) OVER ()}) y el desvío se pide centrado en
+ella; esa misma evaluación da las filas obtenidas y decide el reintento. En
+SQLite, que suma los cuadrados en la consulta, se resta además
+\code{n * (media - centro)^2} (las dos pasadas corregidas), porque la media de
+la ventana no es la exacta. En SQL Server, MySQL, MariaDB y duckdb esa media y la resta son
+dobles; la media y el desvío de un decimal salen de sus sumas exactas,
+pedidas en la misma consulta (ver «La media en coma flotante»). Con
+\code{bloque_muestra = "con_muestra"} el
+resumen de un decimal sale del texto que la muestra trae de cada valor: el
+desvío es el doble más cercano del exacto, de las sumas sin redondeo de
+las diferencias con una de sus centrales y de sus cuadrados. El de
+\code{perfil_muestra} lo calcula \code{\link[=perfilar]{perfilar()}} sobre lo leído, que
+para un decimal es el doble de su texto, y rige la regla de los dobles en
+todas las vías, también por la tabla completa, donde el de \code{resumen_tabla}
+es el exacto: no se publica (queda \code{NA}) y la columna queda en
+\code{perfil_muestra$meta$desvio_decimal_doble}. No
+se fija una semilla ni se toca el generador de números aleatorios de R.
+Como red en todas las
+vías, un desvío \code{0} sobre una columna con dos valores distintos —un mínimo
+menor que el máximo— es imposible y queda \code{no_disponible} con su motivo.
 \item \strong{El cotejamiento.} El resumen SQL agrupa y ordena con el cotejamiento
 de la columna: sobre una \verb{COLLATE NOCASE} de SQLite o una colación ICU no
 determinista de PostgreSQL, "Montevideo" y "montevideo" son un valor, y
@@ -943,8 +1254,10 @@ una columna de \code{columnas_opcionales} o de \code{aplicabilidad}, que la mues
 cuenta sobre su universo —y todas las métricas de la columna con
 \code{aplicabilidad} si la muestra dejó afuera valores presentes—; las métricas
 de magnitud de una columna de la que la muestra excluyó los
-\code{sentinelas_numericos} declarados; y las de un entero de 64 bits desde
-2^53, que el resumen no publica. Tampoco lo que un bloque no calculó: una
+\code{sentinelas_numericos} declarados; las de un entero ancho desde
+2^53, que el resumen no publica; y el \code{desvio} de un decimal que la
+muestra leyó como doble y no publicó (causa \code{decimal_doble}, ver
+\code{perfil_muestra$meta$desvio_decimal_doble}). Tampoco lo que un bloque no calculó: una
 métrica que \code{resumen_tabla$sql} declara \code{no_disponible} —el motor rechazó
 la consulta sobre el tipo (\code{json}, \code{xml} o \code{point} de PostgreSQL; \code{text},
 \code{ntext}, \code{image} o \code{geography} de SQL Server), una guarda la retuvo—, la
@@ -1008,7 +1321,10 @@ esquema expone como numérica paga además una sonda propia de magnitud. Usa
 etapa \code{sonda_magnitud}. Si la sonda no entra en \code{max_consultas}, las métricas
 dependientes quedan \code{no_disponible} con el motivo del presupuesto. Cuando
 \code{incluir_valores = FALSE}, el motivo no publica el valor que devolvió el
-motor.
+motor. Bajo \code{universo = "muestra_motor"} con \code{bloque_muestra = "solo_agregados"}, si se pide también \code{validos} o \code{desvio}, la sonda no es
+una consulta aparte: va en el lote de agregados, la misma sentencia y la
+misma muestra que el desvío, y su fila \code{sonda_magnitud} comparte el
+\code{consulta_id} del lote.
 La proyección temporal no usa esos agregados planos: si hay más de un lote y
 \code{instrumentar = TRUE}, se mide el primer lote de distintos y, después de
 ejecutarlo, se multiplica su mediana por la cantidad total de lotes. El aviso
@@ -1308,6 +1624,18 @@ mediana y no informa mínimo ni máximo, útil cuando la tabla es un padrón y
 la moda de un identificador único es un documento real. Si se pidió \code{desvio},
 la sonda de magnitud que ese cálculo necesita puede emitirse, pero su motivo
 nunca publica el valor devuelto por el motor.
+}
+
+\section{Valores de texto extensos}{
+
+En \code{muestra_motor}, las columnas de texto de PostgreSQL, SQL Server,
+MySQL y MariaDB que superan \code{max_largo_valor_vocabulario} se solicitan
+como largo en caracteres, largo en bytes y resumen MD5. El contenido
+completo se conserva solo para los valores que no superan ese umbral, por
+lo que el tamaño máximo de una fila se conoce antes de \code{dbFetch(n)}. La
+cobertura agrega \code{texto_largo_no_evaluado} para declarar los diagnósticos
+textuales que no se pudieron calcular sobre esos valores; sus faltantes,
+duplicados y longitudes siguen entrando en las métricas disponibles.
 }
 
 \section{Progreso}{
