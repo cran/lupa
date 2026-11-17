@@ -530,7 +530,7 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb10-6"><a href="#cb10-6" aria-hidden="true"></a><span class="kw">attr</span>(resultado<span class="op">$</span>datos, <span class="st">&quot;columnas_duplicadas_marcadas&quot;</span>)</span>
 <span id="cb10-7"><a href="#cb10-7" aria-hidden="true"></a><span class="co">#&gt;    columna_1 columna_2</span></span>
 <span id="cb10-8"><a href="#cb10-8" aria-hidden="true"></a><span class="co">#&gt; 1 id_persona  id_copia</span></span></code></pre></div>
-<p>El plan se puede editar antes de aplicar. Quitar una acción, corregir un parámetro o cambiar <code>n_afectadas</code> no altera la obligación de observar qué pasó. Si una acción seleccionada no cambia ningún valor, el registro dice <code>fallida</code> con su motivo. Lo dice incluso cuando el estimado está ausente (<code>NA</code>).</p>
+<p>El plan se puede editar antes de aplicar. Quitar una acción, corregir un parámetro o cambiar <code>n_afectadas</code> no altera la obligación de observar qué pasó. Si una acción seleccionada no cambia ningún valor, el registro dice <code>fallida</code> con su motivo, incluso cuando el estimado está ausente (<code>NA</code>). La excepción es una acción de texto cuyo problema ya resolvió una acción anterior del mismo plan: queda <code>ejecutada</code>, con <code>n_cambiadas = 0</code>.</p>
 <p>Las acciones destructivas nunca son recomendadas. Aunque las activemos en el plan, <code>aplicar()</code> exige además <code>permitir_eliminacion = TRUE</code>. Lo retirado se conserva en <code>resultado$eliminados</code>, salvo decisión contraria. Sin ese consentimiento, la llamada se niega <strong>antes de tocar nada</strong>. No corre ninguna acción del plan, tampoco las que no eliminan, y el error dice cuáles son los 2 caminos.</p>
 <p><code>n_no_reversibles</code>, en el registro, no se calcula por el nombre de la acción sino por lo que quedó en el resultado. Una normalización que funde 2 valores distintos (pasar <code>ana</code> y <code>ANA</code> a <code>ANA</code>) cuenta esas celdas: lo que las separaba no quedó en ningún lado.</p>
 </div>
@@ -558,9 +558,9 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb12-4"><a href="#cb12-4" aria-hidden="true"></a><span class="co">#&gt;             columna        cambio        valor_anterior valor_actual</span></span>
 <span id="cb12-5"><a href="#cb12-5" aria-hidden="true"></a><span class="co">#&gt; 10 .grupo_duplicado     aparecido                  &lt;NA&gt;    constante</span></span>
 <span id="cb12-6"><a href="#cb12-6" aria-hidden="true"></a><span class="co">#&gt; 11 .grupo_duplicado     aparecido                  &lt;NA&gt;    faltantes</span></span>
-<span id="cb12-7"><a href="#cb12-7" aria-hidden="true"></a><span class="co">#&gt; 12             &lt;NA&gt; no_comparable      filas_duplicadas         &lt;NA&gt;</span></span>
-<span id="cb12-8"><a href="#cb12-8" aria-hidden="true"></a><span class="co">#&gt; 13           cedula      resuelto faltantes_disfrazados         &lt;NA&gt;</span></span>
-<span id="cb12-9"><a href="#cb12-9" aria-hidden="true"></a><span class="co">#&gt; 14             sexo      resuelto faltantes_disfrazados         &lt;NA&gt;</span></span></code></pre></div>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true"></a><span class="co">#&gt; 12           cedula      resuelto faltantes_disfrazados         &lt;NA&gt;</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true"></a><span class="co">#&gt; 13             sexo      resuelto faltantes_disfrazados         &lt;NA&gt;</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true"></a><span class="co">#&gt; 14             &lt;NA&gt; no_comparable      filas_duplicadas         &lt;NA&gt;</span></span></code></pre></div>
 <ul>
 <li>Los faltantes disfrazados de <code>cedula</code> y <code>sexo</code> quedaron <code>resuelto</code>.</li>
 <li>Los hallazgos <code>aparecido</code> en <code>.grupo_duplicado</code> son la huella de la marca. Esa columna sólo tiene valor en las filas duplicadas, así que el perfil la encuentra casi vacía y con un único valor.</li>

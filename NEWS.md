@@ -1,3 +1,537 @@
+# lupa 0.1.2
+
+## Trazabilidad
+
+- Los tres hallazgos de formato de fecha (`formatos_fecha_mixtos`,
+  `formato_fecha_ambiguo` y `anio_de_dos_digitos`) traen en su `trazabilidad`
+  las filas con el problema; antes decían `no_aplica`. La traza se arma sobre
+  la columna entera, también cuando la tabla de formatos, la evidencia y
+  `n_afectados` son de una muestra, y puede nombrar filas escritas en formatos
+  que la muestra no llegó a ver. `n_afectados` sigue contando formatos, así que
+  el `total` de la traza cuenta filas. Esa segunda lectura de la columna se hace
+  sólo cuando alguno de los tres hallazgos sale, una vez por columna.
+  `anio_de_dos_digitos` traza toda fila cuya escritura sólo admite lecturas con
+  el año de dos cifras; `formato_fecha_ambiguo`, toda fila escrita en una
+  lectura que la columna entera no puede resolver; `formatos_fecha_mixtos`,
+  todas las filas con fecha, primero las de las escrituras que no son la más
+  frecuente, con el reparto de `casi_duplicados_vocabulario`
+  (`n_filas_formas_variantes`, `n_filas_formas_dominantes`); con empate en el
+  primer lugar no hay dominante y todas cuentan como variantes.
+- `posible_ausencia_estructural` y `regla_silencia_ausencia` traen en su
+  `trazabilidad` las filas que cuentan: las ausentes que caen donde la regla
+  dice que la columna no corresponde, y las que la declaración del universo
+  dejó de contar.
+- La advertencia `lupa_trazabilidad_incoherente` revisa también esos cinco:
+  avisa si al construir el perfil un hallazgo de formato no trae filas o un
+  informativo que cuenta filas no las nombra. Un perfil guardado por una versión
+  anterior se publica sin aviso.
+
+## Relaciones
+
+- Una dependencia funcional que casi se cumple es ahora el hallazgo
+  `relacion_funcional_columnas` (severidad `sospechoso`, unidad `fila`): uno por
+  cada fila de `perfil$dependencias` que no es exacta, y uno por sentido, con
+  `columna = "determinante,dependiente"`, `n_afectados` igual a sus violaciones
+  y, en la `trazabilidad`, las filas que la rompen (las de la tabla si la
+  dependencia se recalculó sobre ella; las de la muestra, con
+  `alcance = "muestra_dependencias"`, si no). Con empate en la moda de un grupo,
+  rompen las filas del valor que aparece después. `detectar_dependencias()` y
+  `perfil$dependencias` no cambian, y el plan no propone una acción: la relación
+  es observada, no una regla del dominio.
+- `comparar_perfiles()`: apagar `analizar_dependencias` o recortar la búsqueda
+  publica esos hallazgos como `no_evaluado`, y `umbral_dependencia` y
+  `umbral_casi_clave_dependencia` se declaran en `configuracion_umbrales`.
+  Comparar un perfil de una versión anterior con uno nuevo de los mismos datos
+  publica `aparecido` por cada dependencia casi exacta, en cada sentido.
+- `detectar_relaciones()` dice cuántas filas quedan huérfanas y cuáles. Cada
+  par comparado publica `n_filas_huerfanas_tabla1`, `n_filas_huerfanas_tabla2`,
+  `n_valores_huerfanos_tabla1` y `n_valores_huerfanos_tabla2` —lo que la
+  cobertura deja afuera; un valor ausente no es huérfano—, y las columnas-lista
+  `huerfanas_tabla1` y `huerfanas_tabla2` nombran las filas con la forma de la
+  trazabilidad de un hallazgo (`indices_fila`, `total`, `truncado`). Las filas
+  se nombran en el lado casi cubierto (cobertura entre `umbral_cobertura` y
+  1), hasta `max_filas_huerfanas` (1000 por omisión); por debajo del umbral se
+  cuentan y no se nombran. Los valores huérfanos no se publican: con los
+  índices están a una línea para quien tiene la tabla.
+- `relaciones_coleccion()` publica los mismos cuatro conteos, sobre las filas
+  leídas. No nombra las filas, que serían posiciones de la lectura, ni agrega
+  consultas.
+- Los conteos y las filas cuentan en `tope_memoria_mb`: con un tope finito, el
+  mismo presupuesto compara menos pares que antes, y los que quedan sin comparar
+  salen declarados como siempre. Quien leía una columna del resultado
+  abreviando su nombre (`rel$n_valores` por `n_valores_comunes`) recibe ahora
+  `NULL`, porque hay más de una que empieza así.
+
+## Documentación
+
+- `citation("lupa")` lleva el DOI que CRAN le asignó al paquete,
+  `10.32614/CRAN.package.lupa`, cuando el paquete se instaló desde CRAN, como la
+  cita que R arma sola para un paquete sin archivo de cita propio. Los dos
+  README lo dicen junto al DOI de Zenodo.
+- La portada del sitio vuelve a ser la misma que el README en castellano: le
+  faltaban las insignias de CRAN y de Zenodo y la frase del DOI de Zenodo.
+- El título del paquete dice que perfila tablas y bases de datos: «Data
+  Profiling and Quality Measurement for Tables and Databases». La cita
+  (`citation("lupa")` y `CITATION.cff`) lleva el mismo.
+- Los dos README muestran también la instalación de la versión de desarrollo
+  desde r-universe, ya construida, además de la de GitHub.
+- La ayuda de `perfilar()` dice que la muestra se toma por posición: en una
+  tabla de más filas que `muestra`, lo que se mide sobre ella depende del orden
+  de las filas, y la misma tabla leída de una base sin `ORDER BY` puede dar dos
+  perfiles distintos.
+
+## Rendimiento
+
+- `perfilar()` es entre seis y ocho veces más rápido sobre columnas de texto
+  con números. Sobre 200.000 filas, en Linux, pasa de 321 a 38 segundos con
+  diez columnas de decimales con coma, de 418 a 67 con diez de importes con
+  moneda y de 164 a 27 con una mezcla de listas, códigos e importes; perfilar
+  `datos_operativos` pasa de 0,128 a 0,119 segundos por llamada. Son medianas
+  de tres corridas alternadas contra la 0.1.1, que rehace
+  `benchmark/medir_texto_numerico.R`. Las respuestas no cambian. Lo que cambió:
+  - la detección de celdas con varios valores (`celdas_multivaluadas`) mira la
+    columna entera en cada paso: preguntaba celda por celda si era un número
+    escrito con coma decimal o con miles y partía cada celda por separado;
+  - lo que sólo puede leer o cambiar letras no ASCII —declarar la codificación,
+    bajar a minúsculas las letras acentuadas, la tabla de descomposición, la
+    protección de `ñ` y `ü`— recorre sólo las celdas con algún carácter no
+    ASCII; las entidades HTML se buscan sólo donde hay un `&`, y los controles e
+    invisibles sólo en las celdas que traen alguno. Bastaba un símbolo de moneda
+    en la columna para que cada celda pasara por su propia pregunta, cada una
+    con un costo fijo que en Windows es de unos 47 microsegundos;
+  - el mapa de valores distintos —el que da `n_distintos` y la moda— agrega de
+    una vez los valores nuevos de cada bloque, en vez de copiar el vector y
+    medir el estado entero por cada uno; si el estado pasaría el tope de
+    memoria, corta en el mismo valor que antes;
+  - el vocabulario de los casi duplicados se normaliza una vez por valor
+    distinto y no por fila, la columna se lee como número una vez para la
+    secuencia, los faltantes disfrazados y el resumen, y los faltantes
+    disfrazados se detectan una sola vez cuando no hay centinelas declarados.
+- `aplicar()` es más rápido sobre columnas grandes con pocas celdas que
+  cambiar. Quitar controles invisibles y normalizar espacios Unicode recorren
+  sólo las celdas que pueden traerlos, y la cuenta de lo que una acción pierde
+  arma grupos sólo con los valores de las celdas que cambiaron. Sobre una
+  columna de dos millones de filas con 401 celdas que tocar, en Linux, reparar
+  la codificación y quitar los controles pasa de 38 a 10 segundos. Es el
+  costo de las mismas acciones: con el plan por omisión, `aplicar()` puede
+  tardar más en total que con la 0.1.1, porque ahora aplica reparaciones de
+  codificación que la 0.1.1 dejaba sin marcar.
+
+## Correcciones
+
+- `perfilar_dbi()` publicaba con estado `no_disponible` —«La consulta terminó
+  sin un valor para la métrica»— la moda de una columna de texto cuando esa
+  moda es la cadena vacía `""`, aunque el valor y su frecuencia salían en
+  `resumen_tabla$columnas` y `perfilar()` decía `moda = ""`: leía la cadena
+  vacía como el `NULL` de SQL. Ahora sale `calculado` (o `estimado` sobre una
+  muestra del motor).
+- La descripción de `clave_con_ausentes` y de `clave_no_unica` nombra la clave
+  declarada como la muestra la consola (`ciudad\xa0`) cuando su nombre no es
+  UTF-8 válido: pegaba el byte crudo junto al texto del paquete y la frase
+  quedaba marcada UTF-8 sin serlo.
+- En `detectar_duplicados_aproximados()`, dos textos iguales —tal cual o tras
+  la normalización— publican distancia 0. `stringdist` puede devolver ruido
+  de coma flotante en lugar del cero (3.3e-17 en macOS sobre arm64, y lo mismo
+  en Linux con un R compilado con multiplicación fusionada), y la evidencia
+  del par decía `distancia 0.0000000000000000333`.
+- Una celda sin marca de codificación con un byte que no es UTF-8 válido —lo
+  que deja `read.csv()` sin `fileEncoding` sobre un CSV en latin-1 o
+  Windows-1252: el espacio duro como separador de miles, un grado, un byte
+  suelto— hacía abortar `perfilar()` entero en una sesión UTF-8 con «input
+  string N is invalid UTF-8» cuando la columna tenía números o fechas escritos
+  como texto; `analizar()` abortaba igual, y `perfilar_dbi()` y
+  `perfilar_coleccion()` perdían la muestra con un aviso. Ahora el perfil
+  describe el resto de la columna, la celda queda contada en
+  `n_codificacion_invalida` con su hallazgo, y la evidencia de
+  `tipo_declarado_distinto` dice que la conversión no lee esa celda en vez de
+  afirmar que no se pierde ningún valor. Tampoco abortan ya `perfilar()` con
+  una cadena así en `cadenas_ausencia`, ni `perfilar_dbi()` cuando la moda de
+  una columna es una de ellas.
+- La comparación de orden entre columnas lee una columna con bytes que no son
+  UTF-8 válido como el resto del perfil: en una sesión UTF-8 la dejaba fuera
+  sin declararlo en `meta$orden_columnas`, y bajo `LC_ALL=C` contaba esas
+  celdas como valores que no se pudieron convertir y descartaba el par.
+- `print()` de `hallazgos()` y de `cobertura()` ya no aborta en una sesión
+  UTF-8 cuando un nombre de columna trae, sin marca, bytes que no son UTF-8
+  válido —lo que deja `data.table::fread()` sobre un CSV en latin-1 con
+  encabezados acentuados—. El nombre viaja dentro de sus columnas-lista y
+  `print.data.frame()` no podía formatearlo: escribir `cobertura(p)` en la
+  consola abortaba con «invalid multibyte string». Las dos tablas llevan ahora
+  la clase `tabla_lupa` delante de `data.frame`, que las imprime como el resto
+  de las salidas del paquete, con el byte escapado (`ciudad\240`). Ningún valor
+  cambia, y `as.data.frame()` devuelve la tabla sin la clase. La llevan también
+  los campos de donde salen —`p$hallazgos` y `p$cobertura_diagnosticos`, los de
+  `perfil_muestra` en `perfilar_dbi()`— y el atributo `cobertura_diagnosticos`
+  del plan, adonde manda su impresión: imprimirlos directo abortaba igual. Lo
+  mismo con un subconjunto de `proponer_modelo()` sin las columnas de la
+  propuesta. Venía de
+  la 0.1.1. Bajo un locale que no puede representar un carácter, esas tablas
+  escriben su punto de código (`a<U+00F1>o`), como ya lo hacía `print()` del
+  perfil.
+- `perfilar()` y `analizar()` abortaban la tabla entera sobre una tabla con
+  columnas de año, mes y día cuya primera fila no formaba una fecha —un mes
+  `0`, un 30 de febrero, un `NA`—, porque la búsqueda de fechas partidas dejaba
+  que R adivinara el formato por el primer elemento; `perfilar_dbi()` perdía
+  la muestra por lo mismo. Ahora lo que no es una fecha cuenta como no válido y
+  el resto de la búsqueda sigue.
+- `comparar_perfiles()` publica `no_evaluado`, y no `resuelto`, cuando un
+  hallazgo de la tabla —como `fecha_partida_columnas`— desaparece porque el
+  perfil nuevo declaró recortada esa búsqueda en `cobertura_diagnosticos`.
+- `comparar_perfiles()`: un grupo de columnas iguales comparado con una entrega
+  sin filas salía `resuelto` con severidad `ok`. La cobertura del perfil vacío
+  declina `columnas_duplicadas` sin nombrar columna, y eso ahora quiere decir
+  «en ninguna columna»: sale `no_evaluado`, como el hallazgo de una columna cuyo
+  diagnóstico se declinó. Y con `sentinelas_numericos = numeric(0)` en uno de
+  los perfiles, la fila `configuracion_sentinelas_numericos` publicaba la lista
+  vacía como `""`; ahora dice `ninguna`, como las demás políticas que son
+  listas.
+- `perfilar_dbi()`, `perfilar_coleccion()` y `relaciones_coleccion()`: si el
+  catálogo de permisos de SQL Server o PostgreSQL no contesta —un sinónimo, una
+  tabla de otra base, un catálogo que la credencial no lee—, la lectura sigue
+  siendo la de siempre, pero ahora se declara: una fila `degradado` en
+  `resumen_tabla$cobertura` (y `resumen_tabla$meta$permisos_sin_consultar`),
+  una fila de alcance `permisos_columnas` en `cobertura_coleccion` y el motivo
+  de la lectura en `meta$lecturas`. Una columna enmascarada de esa tabla se mide
+  como si la máscara fuera el valor, y antes no se decía. Con
+  `columnas_candidatas`, `relaciones_coleccion()` consultaba además el catálogo
+  dos veces por tabla; ahora la validación y la lectura comparten lo consultado.
+- `relaciones_coleccion()` se detiene con `lupa_error_transaccion_dbi` cuando
+  el motor deshace la transacción del usuario mientras se consultan las
+  columnas y los permisos de una tabla, como ya hacían `perfilar_dbi()` y
+  `perfilar_coleccion()`. Antes seguía leyendo con `SELECT *`, fuera de la
+  transacción, y podía relacionar dos columnas enmascaradas.
+- `perfilar()` abortaba la tabla entera, con «subíndice fuera de los límites»,
+  cuando una columna tenía listas escritas con dos delimitadores y las de uno
+  tenían una cantidad de valores que las del otro no tenían (`"12, 15, 18"` con
+  `"16; 17"`). Ahora publica `celdas_multivaluadas` con los dos delimitadores y
+  cuántas celdas tienen cada cantidad de valores.
+- Un identificador numérico con huecos, como 3.159 valores entre 1 y 4.557
+  guardados como texto, recibía a la vez `posible_identificador`,
+  `tipo_declarado_distinto` (con la propuesta de convertirlo a número) y
+  `patron_raro` por sus valores de una cifra; el mismo identificador sin huecos
+  recibía sólo el primero. Dentro del perfil, la pregunta «¿es una numeración?»
+  tiene ahora una sola respuesta, la misma que deja a una numeración fuera de
+  los límites de Tukey: con ella sale `posible_identificador`, no se propone la
+  conversión a número y los valores de una cifra no son un patrón raro. Una
+  numeración guardada como `integer64` se reconoce igual que guardada como
+  doble.
+- `aplicar()` registra como `ejecutada`, con `n_cambiadas = 0` y sin `error`, una
+  acción de texto que no cambia nada porque una acción anterior del mismo plan
+  ya resolvió el problema que la motivó, como `recortar_espacios` después de que
+  `convertir_ausencias_textuales` vació sus celdas. El resumen impreso no la
+  cuenta entre las fallidas. Antes quedaba `fallida` aunque los datos quedaran
+  limpios. Si el problema sigue en los datos, o nunca estuvo en los que recibe
+  `aplicar()`, la acción sigue `fallida`.
+- El plan por omisión ya no deja espacios al borde. `normalizar_espacios_invisibles`
+  corre antes que `recortar_espacios`, y un espacio Unicode al borde —el duro
+  (U+00A0), el fino (U+202F) y los demás separadores de Unicode, además de la
+  tabulación vertical y el avance de página— cuenta en `n_espacios_borde` y lo
+  quita `recortar_espacios`, igual que en los validadores. Antes el recorte
+  corría primero y el espacio duro del borde se volvía un espacio común que nadie
+  quitaba, o el plan ni ofrecía el recorte: después de aplicarlo, el perfil
+  volvía a publicar `espacios_sobrantes`. El espacio duro que es la mitad de una
+  letra mal convertida se conserva. La sugerencia del hallazgo ya no dice que
+  alcanza con `trimws()`, que no quita esos espacios.
+- `n_codificacion_normalizada` ya no cuenta una celda que queda ASCII después de
+  la acción, como `a` con un espacio de ancho cero que se quita: ya no tiene
+  codificación que cambiar.
+- `planificar_limpieza()`: una conversión de tipo (`convertir_tipo`,
+  `convertir_numero_regional`, `convertir_fecha_confirmada`) sobre una columna
+  con `aplicabilidad` o declarada en `columnas_opcionales` anuncia en
+  `n_afectadas` los valores presentes de la columna, que son los que `aplicar()`
+  cambia. Antes contaba como presentes las celdas vacías fuera del universo:
+  sobre 70 filas aplicables con 10 faltantes y 30 vacías fuera, prometía 90
+  cambios donde `aplicar()` hacía 60. Tampoco contaba los presentes de las filas
+  donde la regla no se pudo decidir. Sin universo declarado, el plan no cambia.
+- `planificar_limpieza()` y `analizar()` con `proteger_datos_personales = TRUE`
+  ya no abortan con «subíndice fuera de los límites» cuando una columna
+  protegida tiene una regla de `aplicabilidad`. El barrido que tapa las fechas
+  de los parámetros borraba un parámetro `NULL` (`cadenas_ausencia` sin
+  declarar) y corría los que venían detrás. Sin la regla no abortaba, pero el
+  plan protegido perdía ese parámetro sin avisar; ahora cada acción trae los
+  mismos parámetros que sin protección.
+- Un importe con el símbolo de la moneda detrás del número (`1.234,56 €`,
+  `1.234,56€`, `1.234,56 $`) se reconoce igual que con el símbolo delante:
+  cuenta en `n_numeros_texto`, publica `numero_texto_moneda`, recibe
+  `numero_como_texto` y el plan lo convierte. Lo mismo vale para `U$S35` pegado
+  y para el espacio duro o el fino entre el símbolo y el número. `€ 10` y
+  `20 €` son la misma moneda.
+- Un valor con moneda delante y detrás (`$ 35 $`, `USD 35 EUR`, `$ 35 USD`) no
+  es un número: `USD 35 EUR` se convertía en 35 y se perdía el `EUR`.
+- `perfilar_por()`: sobre una columna que en la tabla entera es una numeración
+  densa, cada grupo cuenta los faltantes disfrazados con la guarda de la
+  columna entera, como `perfilar()`. Un `999` dentro de `1:2000` ya no se suma
+  al hallazgo `faltantes` del grupo: un grupo de 50 filas con 4 `NA` y dos
+  `999` publicaba «4 ausentes reales y 2 disfrazados (0.120 del total)» y
+  cruzaba el umbral. Tampoco entra en `faltantes_disfrazados` ni en la
+  proporción. Lo protegido se declara en `cobertura_diagnosticos`
+  (`centinelas_numericos`), con el motivo y si contado habría cruzado el umbral.
+- `convertir_sentinelas_numericos` convierte exactamente las celdas que el
+  perfil contó en `n_faltantes_disfrazados_numericos`. En la 0.1.1 el plan leía
+  la lista de la evidencia del hallazgo: con más marcas en la columna de las
+  que la evidencia muestra, con una marca declarada que contiene `; ` o con
+  `proteger_datos_personales = TRUE`, la lista volvía al catálogo entero y
+  `aplicar()` podía convertir también el `999` legítimo de una numeración.
+  Ahora el hallazgo `faltantes_disfrazados` publica en su `trazabilidad` el
+  campo `sentinelas_contados`, tomado de las mismas celdas que el conteo, y el
+  plan arma la lista con él. Donde el perfil no lo trae (un perfil guardado por
+  una versión anterior, o un hallazgo cuya evidencia tapó la protección de
+  datos personales, donde el campo queda `NA`), `aplicar()` acota la lista
+  corriendo el mismo detector sobre los datos que recibe; si el perfil contó
+  dentro de un universo de `aplicabilidad` y la acción ya no trae esa regla,
+  termina `fallida` y dice por qué.
+- La misma acción ya no toca las celdas que el perfil contó como marca textual
+  declarada en `cadenas_ausencia`: con `cadenas_ausencia = "999"`, `"999"` es de
+  `convertir_ausencias_textuales` y sólo `"999.0"` es de esta acción.
+- Sobre otra entrega de la misma tabla, la acción convierte los centinelas que
+  su lista nombra y ningún otro; antes, el catálogo entero.
+- `perfilar()` cuenta lo mismo en una numeración guardada como `integer`,
+  `difftime` o `units`: en las dos últimas la guarda de la numeración no corría
+  y el `999` de `1:1000` salía como faltante disfrazado. Y
+  `convertir_sentinelas_numericos` acepta duraciones y medidas con unidad
+  (antes terminaba `fallida`) y conserva la clase y la unidad de la columna.
+- `comparar_equivalencia()` y `comparar_perfiles()` comparan la moda y el
+  centinela conjeturado de una columna numérica por su valor y no por cómo los
+  imprimió la sesión. La misma tabla perfilada con `options(OutDec = ",")` y con
+  punto salía `materialmente_distinto` en `moda` (`2245,63` contra `2245.63`) al
+  lado de `identico` en `media`. Una columna de texto se sigue comparando como
+  texto, y un cambio verdadero de la moda se sigue informando.
+- `comparar_perfiles()` ya no informa como modificada la política de centinelas
+  numéricos cuando uno de los dos perfiles no la registra, como pasa con un
+  perfil guardado por una versión anterior: sin registro no hay evidencia de un
+  cambio. Una política que de verdad cambió (`sentinelas_numericos = numeric()`
+  contra la de omisión) se sigue informando.
+- Una columna que se llama literalmente `<tabla>` ya no se confunde, en
+  `comparar_perfiles()`, con los hallazgos que son de la tabla entera: su fila
+  salía con `columna = NA`.
+- `relaciones_coleccion()` consulta el esquema de cada tabla una vez; lo
+  consultaba dos.
+- El mensaje de una columna de geometrías con el presupuesto recortado
+  (`max_geometrias`) cuenta sobre los valores que se intentaron convertir: decía
+  «1 de 2 valores presentes» cuando había tres presentes y se habían intentado
+  dos.
+- `perfilar_por()` toma una sola vez, con el código de `perfilar()`, las tres
+  decisiones que dependen de la columna entera —el centinela numérico que la
+  columna conjetura, la numeración densa que impide tomar por ausencia un
+  código como `999`, y el identificador que excluye a una columna de la ley de
+  Benford—, y las aplica también a las columnas de texto y `factor` que se leen
+  como números. Antes, un grupo de una numeración escrita como texto publicaba
+  `faltantes_disfrazados` por un `999` que la tabla entera no acusa, o un
+  `posible_centinela_numerico` distinto del de la columna, sin fila en la
+  cobertura; y un grupo publicaba `desviacion_benford` sobre una columna que
+  `perfilar()` excluye por identificador. Lo que un grupo deja de publicar por
+  estas decisiones queda declarado en `cobertura_diagnosticos`
+  (`centinelas_numericos`, `ley_benford`). Todo lo demás —los valores
+  extremos, `posible_identificador`, las ausencias escritas con texto— lo
+  sigue decidiendo cada grupo con sus filas.
+- `perfilar_por()` sobre `integer64`: una numeración cuya moda sobresale
+  (cincuenta `999` en `1:2000`) publica esos `999` en cada grupo, como
+  `perfilar()` y como la misma columna en `double`; antes los grupos los
+  declaraban en la cobertura.
+- `perfilar()` sobre `integer64`: un centinela de la lista declarada (por
+  omisión `-9999`, `-999`, `999`) se publica como `faltantes_disfrazados`,
+  igual que en `double`, y ya no además como `posible_centinela_numerico`;
+  `centinela_valor`, `centinela_repeticiones` y `densidad_sin_centinela` quedan
+  `NA`, como en `double`.
+- Un valor con un sufijo en mayúsculas ya no se convierte a número perdiendo el
+  sufijo. `c("1.5TB", "500GB", "250MB", "2TB")` y `c("850K", "1,5M", "2M",
+  "300K")` publicaban `n_numeros_texto = 1` —sólo el valor con separador
+  decimal— y el plan proponía `convertir_numero_regional` activada, que dejaba
+  1.5, 500, 250 y 2. El perfil contaba con una regla (un sufijo es una unidad
+  sólo si termina en minúscula) y la conversión leía con otra (cualquier tramo
+  de letras). Ahora es una sola: lo que acompaña a un número es una unidad
+  (`%` o una abreviatura que termina en minúscula) o una moneda, y si no, el
+  valor no se convierte. `12 KG`, `12A`, `1.5TB` y `850K` no cuentan en
+  `n_numeros_texto` ni en `proporcion_numeros_texto`, y una columna que mezcla
+  esos valores con números no se convierte: `c("1,5", "2,5", "3", "12 KG")`
+  dejaba 12 donde decía `12 KG`. Siguen escritos como números, y junto a otros
+  no apagan `numero_como_texto` para la columna: el hallazgo nombra `1,5` y
+  `2,5`, su evidencia cuenta aparte los valores con un sufijo o un código que
+  no se convierte, y la conversión queda bloqueada mientras haya alguno.
+- Tres mayúsculas junto a un número son una moneda sólo si son un código ISO
+  4217, con la lista de `validar_iso4217()`. `LEY 18331` se publicaba con
+  `numero_texto_moneda = "LEY"` y se convertía a 18331.
+  Como con el sufijo, `ABC 13` junto a `USD 12` no se convierte ni apaga
+  `numero_como_texto` para el importe.
+- `USD 12\nkg` —un código ISO 4217, un número y una unidad separados por un
+  salto de línea— se lee como `USD 12 kg`, igual que `$ 35\nkg`: la moneda
+  publicada era el valor entero y `monedas_mixtas` contaba una moneda falsa
+  por cada valor así.
+- En una columna que el perfil infiere como `identificador` (`101a`, `102a`),
+  `convertir_numero_regional` queda `lista` sin activar: `aplicar()` dejaba
+  101, 102 y la letra del código se perdía sin que nadie lo pidiera.
+- La inferencia del tipo, el resumen y `convertir_tipo` leen los números
+  escritos como texto con la misma función y la misma convención decimal.
+  `c(".5", ".5", ".5", "1.234,56", "1.234,56", "1.234,56", "1.234,56", "7",
+  "12,5")` se infería `doble` con compatibilidad 1 mientras el resumen dejaba
+  cuatro de los nueve valores afuera; `c("1e3", "2,5", "3.5e2", "4")` contaba
+  cuatro números y resumía tres; y `convertir_tipo` convertía `12.500` en 12,5
+  en una columna de coma decimal cuyo resumen publicaba 12500.
+- Un separador decimal que abre el número (`.5`, `,5`) se lee igual que `0.5` y
+  `0,5` y aporta la misma evidencia de convención: `c(",5", ",25", "1.500",
+  "2,75")` leía `1.500` como 1,5 y su gemela con el cero escrito como 1500.
+- La notación científica es un número cualquiera sea el signo del exponente:
+  `c("1.2E-05", "3.4E-07", "5.6E-03", "2.2E-04")` y `c("1e5", "2e5", "3e5",
+  "4e5")` se inferían `identificador`, sin resumen, y `1E+05` se infería
+  `doble`. Un exponente que desborda el doble (`1e400`) no es un número.
+- Con un decimal entre enteros el tipo inferido es `doble`, que es el que cubre
+  todos los valores. `c("10", "12", "9", "15", "9,5")` se infería `entero` con
+  compatibilidad 0,8 y el hallazgo decía «convertir dejaría 1 de 5 valores en
+  NA» sobre una columna que el plan convertía sin ningún `NA`. Lo mismo con
+  un número en notación científica entre enteros (`1e5`, `1E+05`).
+- La evidencia de `tipo_declarado_distinto` dice «la conversión no pierde
+  ningún valor» sólo cuando el plan propone una conversión `lista`. La decía
+  sobre un entero que no entra en `integer` (`3000000000`), sobre una columna
+  con una celda de espacios y sobre una columna con notación científica cuya
+  conversión regional queda bloqueada, al lado de un plan que no convertía.
+- Una celda vacía o de espacios no bloquea `convertir_tipo`: el perfil ya la
+  cuenta como ausencia y la conversión la deja en `NA`, como hace
+  `convertir_numero_regional`.
+- La justificación de una conversión con `%` ya no dice que los valores «quedan
+  como proporción en [0, 1]»: `150%` queda en 1,5.
+- Las acciones de texto del plan respetan con una sola regla lo que la
+  reparación de la codificación necesita. Sobre una celda que el perfil señala
+  como rota y reparable, una acción se conserva sólo si conmuta con la
+  reparación —reparar y después aplicarla da el mismo texto que aplicarla y
+  después reparar—; si no, la celda queda como estaba y no cuenta entre las
+  cambiadas. Vale para `convertir_mayusculas`, `convertir_minusculas`,
+  `convertir_titulo`, `convertir_segun_diccionario` y
+  `convertir_ausencias_textuales`, que no pasaban por la protección: con
+  `reparar_codificacion` desmarcada, `MÃœNCHEN` en minúsculas quedaba
+  `mãœnchen`, ya sin arreglo. Y para `decodificar_entidades_html`: decodificar
+  `&#233;` junto a una palabra rota (`&#233; cÅ“ur`) dejaba la celda sin
+  reparación posible; ahora la acción, sola, no toca esa celda, y después de la
+  reparación sí.
+- Una comilla tipográfica, un guion o un emoji rotos con un símbolo pegado
+  delante (un espacio duro, un `°`) ya no pierden su último byte con
+  `eliminar_controles_invisibles`. La protección reconoce un byte de
+  continuación también como el carácter que Windows-1252 pone en su lugar (`€`
+  por `0x80`). Era uno de los dos casos que la 0.1.1 declaraba sin cubrir.
+- Un espacio duro o un guion blando agregados después de la mala conversión
+  —el `&nbsp;` de una página web delante, detrás o entre palabras rotas— ya no
+  impiden reparar la celda entera. Con un espacio duro delante, «Şanlıurfa»
+  mal leída quedaba con la `Ş` rota, el registro decía `reparado` y el perfil
+  siguiente ya no la señalaba; ahora sale entera, como con un espacio común.
+- Texto bien escrito que la heurística tomaba por mojibake deja de señalarse y
+  de «repararse»: una palabra en mayúsculas terminada en `Ã` antes de un
+  espacio duro o de un signo que la volvería minúscula («IRMÃ» + espacio duro
+  + «DE» salía «IRMàDE»), y un ordinal antes de una comilla («3º”», «1º»»),
+  que además dejaba la celda protegida y su espacio duro sin normalizar. Una
+  mayúscula que sale de una comilla tipográfica («IRMÃ”» → «IRMÔ») se sigue
+  reparando: es también el mojibake de «AVÔ».
+- La «ŭ» y la «ĭ» leídas como `Å` o `Ä` más un guion blando, detrás de una
+  minúscula («ankaŭ»), se reconocen, se protegen de las acciones de invisibles
+  y se reparan. Sigue sin cubrir el otro caso que la 0.1.1 declaraba: «Š»
+  leída como `Å` más un espacio duro (y «Ġ», «Ơ»), porque «Å» + espacio duro +
+  una palabra es también noruego o sueco bien escrito.
+- Las acciones de invisibles ya no vuelven reparable, por su cuenta, una celda
+  que la reparación no puede tocar: quitar un control C1 suelto pegado a una
+  letra rota («Mar» + U+0081 + «Ã» + guion blando + «a») cambiaba el resultado
+  según la acción corriera antes o después de `reparar_codificacion`. Ahora la
+  celda queda como está y sigue señalada, y el plan no ofrece la acción por
+  ella. La 0.1.1 decía que esos controles se siguen quitando: se quitan salvo
+  en ese caso.
+- Una celda que la reparación de codificación arregla sólo en parte ya no deja
+  sin reparar a las demás de su columna. Bastaba una parcial para que
+  `reparar_codificacion` saliera sin marcar, y el plan por omisión no reparaba
+  ninguna celda, aunque las otras se repararan enteras. Ahora, si la columna
+  tiene celdas que se reparan enteras, la acción sale marcada con
+  `aplicar_parciales = FALSE`: repara ésas, deja las parciales como están,
+  `n_afectadas` cuenta sólo las enteras y la justificación dice cuántas
+  parciales quedan. Se piden poniendo `aplicar_parciales = TRUE` en
+  `parametros`. Una columna que sólo tiene parciales no cambia: la acción queda
+  `lista` sin marcar, y marcarla aplica las parciales. Quien marcaba la acción
+  a mano en una columna con las dos necesita ahora `aplicar_parciales = TRUE`
+  para aplicar también las parciales.
+- Una celda marcada `latin1` y la misma celda en UTF-8 cuentan como un solo
+  valor también cuando traen uno de los cinco bytes que Windows-1252 no define
+  (0x81, 0x8D, 0x8F, 0x90, 0x9D). `n_distintos`, las filas y las columnas
+  duplicadas y `n_no_reversibles` las contaban como dos —en una columna con las
+  dos marcas, o entre una columna `latin1` y su copia en UTF-8—, y daban la
+  celda `latin1` por igual al texto de cuatro letras `<81>`, que es otro dato.
+  Ahora leen el texto como lo leen las acciones de texto.
+- `perfilar()` informa, y `eliminar_controles_invisibles` quita, los operadores
+  invisibles de la matemática (U+2061 a U+2064), los controles de formato en
+  desuso (U+206A a U+206F), los rellenos del hangul (U+115F, U+1160, U+3164 y
+  U+FFA0) y la etiqueta de idioma U+E0001: ningún contador los veía y ninguna
+  acción los tocaba. Las etiquetas U+E0020 a U+E007F, que arman las banderas de
+  Inglaterra, Escocia y Gales, cuentan entre los controles invisibles y se
+  conservan; el hallazgo lo dice.
+- El hallazgo `controles_invisibles` de una celda cuyo control ninguna acción
+  quita —porque sin él la celda se leería como una letra mal convertida— ya no
+  recomienda eliminarlo: dice que el plan no trae una acción para eso.
+- `aplicar()` corre `decodificar_entidades_html` antes que
+  `convertir_minusculas`, `convertir_titulo` y `convertir_mayusculas` de su
+  columna, aunque un `orden` editado la ponga detrás: `jos&eacute;` pasaba a
+  `Jos&Eacute;` y se decodificaba con la E mayúscula, y `&amp;` quedaba en
+  `&Amp;`. Con el orden del plan ya era así.
+- El plan cuenta, para cada acción de texto, las filas que la acción puede
+  cambiar. Donde quitar un invisible o recortar el borde cambia lo que la
+  reparación reconoce, la celda no se cuenta y la acción no se ofrece por ella,
+  así que ninguna acción marcada por omisión termina `fallida` por celdas
+  protegidas. `espacios_sobrantes` deja de contar el espacio del borde que es lo
+  que permite reconocer una letra rota (`ÃŒ` seguido de un espacio): recortarlo
+  dejaba la celda rota y sin señalar; se informa después de reparar.
+- `perfilar()` cuenta en `n_codificacion_rota` y en el hallazgo
+  `codificacion_rota` el texto mal convertido que el motor no puede reparar
+  (`"Œ "`, una letra seguida de U+0081). Antes quedaba sólo en
+  `n_codificacion_no_se_pudo`, suelto o repetido, y una columna sin ninguna
+  celda reparable no tenía hallazgo: `rep("Œ ", 10)` publicaba
+  `n_codificacion_no_se_pudo = 10`, `n_codificacion_rota = 0` y ninguno.
+  Repetir las filas de una columna multiplica los conteos y no cambia los
+  estados ni los hallazgos.
+- La evidencia de `codificacion_rota` cita valores distintos —repetía el mismo
+  hasta cinco veces cuando el valor se repetía en la columna— y no dice
+  «carácter de reemplazo» de un valor que no lo trae.
+- Una columna cuyas celdas rotas se reparan sólo en parte ofrece
+  `reparar_codificacion` `lista` y sin marcar, como dice la ayuda; salía
+  `recuperar_codificacion_en_origen`, informativa, y la reparación parcial no se
+  podía aplicar. La justificación de `recuperar_codificacion_en_origen`
+  distingue los bytes perdidos (U+FFFD) del texto que el motor reconoce mal
+  convertido y no puede reparar.
+- `perfilar_dbi()`: con una columna que el motor no deja leer, las columnas a
+  su derecha se juzgaban con el tipo de la omitida. Un `DECIMAL(18,2)` después
+  de un `BLOB` ilegible salía con `tipo_declarado = "texto"` en el perfil de la
+  muestra, y bajo `universo = "muestra_motor"` con `bloque_muestra =
+  "solo_agregados"` el desvío de una columna sana salía `no_disponible`. Los
+  atributos de cada columna viajan ahora juntos y la columna rota no cambia el
+  perfil de las demás.
+- `perfilar_dbi(metricas = "desvio")`, sin `"validos"`, ya no aborta con
+  «missing value where TRUE/FALSE needed» cuando el motor devuelve una
+  magnitud infinita: la métrica queda `no_disponible` con su motivo.
+- En SQLite y en DuckDB el desvío de una columna con dobles cerca del máximo
+  representable (`1e308`) o muy chicos salía `Inf` o `0` con estado
+  `calculado`. Ahora se calcula escalado, como ya se hacía en PostgreSQL, SQL
+  Server, MySQL y MariaDB, y si el motor igual no devuelve un desvío finito no
+  se publica como calculado.
+- Cuando la lectura por bloques falla y `perfilar_dbi()` responde con el
+  resumen SQL por columna, la segunda corrida respeta lo que se pidió: pisaba
+  `max_consultas`, `dialecto`, los topes de la muestra y los avisos, y la
+  cobertura publicaba dos veces `columnas_opcionales`. Si esa segunda corrida
+  también falla, su mensaje queda en la cobertura.
+- `perfilar_dbi(universo = "muestra_motor")`: cuando la materialización queda
+  recortada por `max_bytes_materializacion`, o no se puede leer por una columna
+  que el motor rechaza y se perfilan las demás, `resumen_tabla$columnas$n` es
+  la cantidad de filas perfiladas y no el total de la tabla, que quedaba al
+  lado de los válidos de unas pocas filas (`n = 5` con `n_validos = 2`). En una
+  corrida sin recortes `n` sigue siendo el total de la tabla. `print()` de ese
+  resultado ya no aborta con «Multiple quantities for pluralization».
+- Tras reintentar una muestra que salió corta, `meta$muestreo$fraccion_solicitada`
+  conserva la fracción pedida; publicaba la del reintento (0,25 o 1 donde se
+  había pedido 0,5).
+- Con `politica_costo = "por_cardinalidad"`, la corrida declara el mismo máximo
+  de consultas (`n_consultas_max`) que `plan_perfilado_dbi()`; declaraba dos de
+  más.
+- Un error de la fuente de la muestra se publica con su mensaje original y no
+  como `capacidad_no_aceptada`, y una columna ilegible conserva sus filas en
+  `resumen_tabla$sql` aunque no quede ninguna métrica por ejecutar.
+- `normalizar_espacios_invisibles` y `reemplazar_separadores`, aplicadas con
+  `reparar_codificacion` desmarcada sobre una columna que mezcla una celda
+  rota con una limpia terminada en `Â` o `Ã` y un espacio tipográfico, ya no
+  tocan la celda limpia: quedaba `Â` más un espacio común, que el perfil
+  siguiente leía como una letra rota, y la acción cambiaba una fila más de las
+  que el plan contaba. Con el plan por omisión no ocurría.
+
 # lupa 0.1.1
 
 ## Perfilado

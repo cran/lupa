@@ -36,22 +36,7 @@
 # comparaba con 15.303, y `largo_maximo` publicaba 5.101. El tope existe por lo
 # que cuesta y por como se degrada la distancia normalizada; las dos cosas
 # dependen de la cadena que entra a `stringdist`, no de la que estaba guardada.
-.largo_maximo_valor_duplicados <- function(x, normalizacion = NULL) {
-  valores <- suppressWarnings(as.character(.texto_analizable(
-    .valores_para_comparar_duplicados(x)
-  )$valores))
-  if (!is.null(normalizacion)) {
-    # Mismo tratamiento del ausente que `.texto_fila_aproximada`: se compara ""
-    # y no `NA`, y medir otra cosa que la que se compara es el defecto que esto
-    # viene a cerrar.
-    valores[is.na(valores)] <- ""
-    valores <- .normalizacion_aplicar(valores, normalizacion)
-  }
-  largos <- .nchar_texto_seguro(valores)
-  largos <- largos[is.finite(largos)]
-  if (!length(largos)) 0 else max(largos)
-}
-
+#
 # Los largos de una columna, ya normalizados, fila por fila. `NA` cuenta como
 # "" porque asi entra a la comparacion, y un largo no finito cuenta 0 en vez de
 # envenenar la suma.
@@ -563,6 +548,11 @@
   )
   iguales <- as.logical(iguales[validos])
   iguales[is.na(iguales)] <- FALSE
+  # Dos textos iguales estan a distancia 0 por construccion. `stringdist` puede
+  # devolver ruido de coma flotante en vez del cero -3.3e-17 en macOS arm64, y
+  # en Linux cuando se compila con multiplicacion fusionada-, y ese ruido se
+  # publicaba en la evidencia del par.
+  lote$distancia[iguales] <- 0
   if (is.null(iguales_originales)) iguales_originales <- iguales
   if (length(iguales_originales) != length(fila_1)) {
     .detener("La igualdad del texto original debe contener una entrada por par.",
@@ -1297,7 +1287,6 @@
     max_cubeta, max_resultados, muestra_estimacion = 400000L,
     presupuesto_pares = Inf, bloqueos = NULL, solo_estimacion = FALSE,
     nucleos = 2L, p = 0.1, igualdad_original = NULL) {
-  n <- length(valores)
   n_hashes <- bandas * filas_banda
   indice <- .ids_qgramas_por_bloques(valores, q)
   ids <- indice$ids

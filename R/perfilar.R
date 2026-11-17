@@ -484,9 +484,13 @@
     !any(columnas_no_compatibles) && !.tiene_nan_en_dobles(datos) &&
     .redondeo_numerico_es_exacto(datos)
   # Un fallo imprevisto de la via rapida repliega a base en vez de abortar:
-  # el resultado exacto lo fija `duplicated()`, no el atajo.
+  # el resultado exacto lo fija `duplicated()`, no el atajo. Las dos vias leen
+  # el texto igual: la de base por `.expandir_datos_identidad()`.
   duplicadas <- if (usa_via_rapida) {
-    tryCatch(.filas_duplicadas_frank(datos), error = function(e) NULL)
+    tryCatch(
+      .filas_duplicadas_frank(.leer_latin1_sin_windows_1252_tabla(datos)),
+      error = function(e) NULL
+    )
   } else {
     NULL
   }
@@ -589,12 +593,6 @@
     logical()
   }
   filas_con_ausentes_logica <- .filas_clave_con_ausentes(valores)
-  n_repeticiones <- if (pudo_comprobar_unicidad) {
-    sum(duplicadas$adelante)
-  } else {
-    NA_integer_
-  }
-  n_filas_colision <- if (!is.null(colisionan)) sum(colisionan) else NA_integer_
   n_filas_colision_con_ausentes <- if (length(colisionan) &&
       length(filas_con_ausentes_logica) == length(colisionan)) {
     sum(colisionan & filas_con_ausentes_logica)
@@ -1123,12 +1121,18 @@
 #' Los valores de texto que no forman UTF-8 válido tampoco se convierten: se
 #' cuentan, se excluyen de los análisis textuales y generan un hallazgo con sus
 #' posiciones. Los diagnósticos de invisibles incluyen controles C0/C1,
-#' espacios Unicode, marcas direccionales, BOM y otros caracteres de transporte.
+#' espacios Unicode, marcas direccionales, BOM y otros caracteres de transporte:
+#' los operadores invisibles de la matemática (U+2061 a U+2064), los controles
+#' de formato en desuso (U+206A a U+206F), los rellenos del hangul (U+115F,
+#' U+1160, U+3164 y U+FFA0) y la etiqueta de idioma U+E0001.
 #' La evidencia los muestra como puntos de código; los espacios Unicode se
 #' detectan aunque sólo se normalizan mediante una acción explícita, y ZWJ/ZWNJ
-#' se informan pero se conservan porque pueden ser semánticos. La comparación
-#' de duplicados con `normalizar = TRUE` aplica estas mismas clases sin borrar
-#' ZWJ/ZWNJ. El resto del texto se cita con sus caracteres, y no con los
+#' (en `n_invisibles_significativos`) y las etiquetas Unicode (U+E0020 a
+#' U+E007F, las que arman banderas como la de Escocia; sólo en
+#' `n_controles_invisibles`) se informan pero se conservan porque pueden ser
+#' semánticos. La comparación de duplicados con `normalizar = TRUE` aplica
+#' estas mismas clases sin borrar ZWJ/ZWNJ ni las etiquetas. El resto del texto
+#' se cita con sus caracteres, y no con los
 #' escapes de punto de código de `encodeString()`, que dependen del locale: la
 #' evidencia es la misma bajo `C` y bajo un locale UTF-8, y el ejemplo que
 #' cita casa con el de la tabla de patrones.
@@ -1416,9 +1420,23 @@
 #' suficientes, y con esa condición sola el veredicto dependería de cuántas
 #' filas se leyeron; una
 #' numeración que se repite —un código de catálogo, una clave foránea— no se
-#' distingue por su forma de esa magnitud y no se trata como numeración. Es la
-#' misma regla que deciden `posible_identificador`, la guarda de los límites de
-#' Tukey, la de los patrones raros y la de Benford. Por eso un código de
+#' distingue por su forma de esa magnitud y no se trata como numeración. Esa
+#' condición de no repetirse es la misma en todas las reglas de numeración del
+#' perfil, y dentro de la fila la pregunta «¿es una numeración?» tiene una sola
+#' respuesta: una columna de enteros —guardada como entero, doble, `integer64`
+#' o texto que se lee número— que cubre al menos la mitad del tramo entre su
+#' mínimo y su máximo con cinco valores distintos o más, casi sin repetirse y
+#' sin un salto de escala ni una moda que sobresalga, o una secuencia `densa`
+#' con al menos un 90 % de valores distintos. Esa respuesta publica
+#' `posible_identificador`, apaga los límites de Tukey, hace que
+#' `tipo_declarado_distinto` no proponga convertir la columna a número y que
+#' `patron_raro` no cuente como desvío a los valores que sólo difieren del
+#' dominante en la cantidad de cifras —los `1` a `9` de una numeración que
+#' arranca en 1—; esto último vale también para una secuencia `densa` que no
+#' es numeración, porque un tramo lleno trae todos los largos. Benford la usa
+#' como una de sus razones para excluir una columna. `secuencia_entera_densa`
+#' mide la cobertura del tramo y no decide sola si la columna es un
+#' identificador. Por eso un código de
 #' catálogo que se repite —un `EstCod` de 1 a 284— recibe límites de Tukey y,
 #' con tres órdenes de magnitud, Benford, aunque se lo pase como texto o como
 #' factor: el paquete infiere número. Para eso está `columnas_codigo`.
@@ -1690,16 +1708,34 @@
 #' y se declaran igual. Un número con moneda o unidad (`USD 1,234.56`, `12 kg`)
 #' no se resume: es un número escrito como texto, y `numero_texto_moneda` y
 #' `numero_texto_unidad` publican lo que traía.
-#' Los prefijos de tres letras separados
-#' del número, incluso como sufijo, `U$S` y los símbolos monetarios se
-#' conservan como evidencia; `monedas_mixtas` informa sus frecuencias sin
-#' convertir ni suponer tasas de cambio. Una única moneda o un símbolo `$`
-#' aislado no produce ese hallazgo.
+#' Un código de tres letras mayúsculas separado del número por espacios,
+#' delante o detrás, es una moneda sólo si es un código ISO 4217 —la lista de
+#' [validar_iso4217()]—: `USD 35` es un importe y `LEY 18331` no es un número;
+#' pegado al número (`35USD`) no es una moneda sino un código. Un símbolo
+#' monetario —`$`, `£`, el del euro— o `U$S` es una moneda delante o detrás
+#' del número, pegado o separado por un espacio, también el duro o el fino que
+#' deja una planilla: `1.234,56 $`, `$1.234,56` y `U$S35` son importes, y
+#' `$ 10` y `20 $` son la misma moneda. Un valor con moneda delante y detrás
+#' (`$ 35 $`, `USD 35 EUR`) no es un número. La moneda se conserva como
+#' evidencia; `monedas_mixtas` informa sus frecuencias sin convertir ni suponer tasas de
+#' cambio. Una única moneda o un símbolo `$` aislado no produce ese hallazgo.
 #' Un sufijo de unidad se reconoce sólo si es `%` o una abreviatura alfabética
-#' en minúsculas; por eso `12 kg` y `13500 g` son unidades, mientras que
-#' `12A` y `13B` se tratan como códigos. Si hay más de una unidad observada,
-#' `unidades_mixtas` informa sus frecuencias y no convierte ni compara sus
-#' magnitudes. Una única unidad no genera ese hallazgo.
+#' que termina en minúscula; por eso `12 kg` y `13500 g` son unidades. Un valor
+#' con un sufijo en mayúsculas que no es un código de moneda (`12A`, `13B`,
+#' `500GB`, `1.5TB`) se trata como un código: no cuenta como número escrito
+#' como texto, tenga o no separador decimal, y el plan no propone convertirlo.
+#' Lo mismo un número con tres mayúsculas que no son un código ISO 4217
+#' (`ABC 13`). Junto a otros números, esos valores no apagan
+#' `numero_como_texto` para la columna: siguen escritos como números, y para
+#' decidir si la columna guarda números como texto cuentan como tales. No entran
+#' en `n_numeros_texto` ni en `proporcion_numeros_texto`, que cuentan lo que la
+#' conversión lee; la evidencia del hallazgo dice cuántos son, y la conversión
+#' de la columna queda sin marcar mientras haya alguno. En
+#' `c("1,5", "2,5", "3", "12 KG")` el hallazgo nombra `1,5` y `2,5`, y `12 KG`
+#' no se convierte.
+#' Si hay más de una unidad observada, `unidades_mixtas` informa sus
+#' frecuencias y no convierte ni compara sus magnitudes. Una única unidad no
+#' genera ese hallazgo.
 #' `formatos_fecha_mixtos` compara representaciones dentro de una columna cuyo
 #' dominio es la fecha o la fecha-hora. Una fecha agregada adentro de una
 #' columna de horas del día —`12/02/2011 6:55 a.m.` entre valores `7:10 a.m.`—
@@ -1726,6 +1762,10 @@
 #' @param muestra Máximo de filas usadas para patrones, inferencia de tipos,
 #'   formatos de fecha y dependencias funcionales. Use `Inf` para analizar todas
 #'   las filas en esos análisis.
+#'   La muestra se toma por posición, así que en una tabla de más filas lo
+#'   que se mide sobre ella depende del orden de las filas: la misma tabla
+#'   leída de una base sin `ORDER BY` puede dar dos perfiles distintos en dos
+#'   lecturas. Para un perfil reproducible, leerla ordenada por una clave.
 #' @param max_patrones Máximo de patrones mostrados por columna.
 #' @param distinguir_mayusculas Si se distinguen mayúsculas y minúsculas.
 #' @param expandir Si se emite un token por carácter en los patrones.
@@ -2003,8 +2043,12 @@
 #'   plataforma. Un texto con más cifras de las que distingue un doble sólo es el
 #'   centinela si lo escribe exacto.
 #' @param analizar_dependencias Si se buscan dependencias funcionales entre
-#'   pares de columnas. Se aplica una sola muestra común a toda la tabla.
+#'   pares de columnas. Se aplica una sola muestra común a toda la tabla. Una
+#'   dependencia publicada que no es exacta es además el hallazgo
+#'   `relacion_funcional_columnas`, con las filas que la rompen.
 #' @param umbral_dependencia Cumplimiento mínimo para informar una dependencia.
+#'   Una informada con cumplimiento menor que 1 es también un hallazgo
+#'   `relacion_funcional_columnas`.
 #' @param umbral_casi_clave_dependencia Tasa de valores distintos a partir de
 #'   la cual un determinante se descarta como casi-clave antes de agrupar.
 #' @param max_columnas_dependencias Máximo de columnas que intervienen en la
@@ -2690,14 +2734,63 @@
 #'   de unidad `valor_distinto` las filas de las formas variantes se entregan
 #'   primero —en `mayusculas_inconsistentes` y `normalizacion_unicode`, la forma
 #'   dominante de cada grupo es la guardada más veces—, de modo que el truncado
-#'   no se lleve lo accionable. Para
-#'   `patron_raro`,
+#'   no se lleve lo accionable.
+#'   En los tres hallazgos de unidad `formato` (`formatos_fecha_mixtos`,
+#'   `formato_fecha_ambiguo` y `anio_de_dos_digitos`), `n_afectados` cuenta
+#'   formatos y la traza enumera filas; por eso su total no se compara con
+#'   `n_afectados`. La traza se arma sobre la columna entera aunque la tabla de
+#'   formatos, la evidencia y `n_afectados` sean de una muestra, y puede nombrar
+#'   filas escritas en formatos que la muestra no llegó a ver; esa segunda
+#'   lectura se hace sólo cuando alguno de los tres hallazgos sale, una vez por
+#'   columna. `anio_de_dos_digitos` traza toda fila cuya escritura sólo admite
+#'   lecturas con el año de dos cifras, incluidas las que dos lecturas probadas
+#'   aceptan y por eso no cuenta el `n` de ninguna; su total puede ser mayor
+#'   que la suma de los `n` de `formatos_fecha`. `formato_fecha_ambiguo` traza
+#'   toda fila escrita en una lectura que la columna entera no puede resolver
+#'   (si la columna entera las resuelve todas, las celdas que admiten dos o más
+#'   de las lecturas que cita). `formatos_fecha_mixtos` traza todas las
+#'   filas con fecha, primero las de las escrituras que no son la más
+#'   frecuente, con el mismo reparto que `casi_duplicados_vocabulario`
+#'   (`n_filas_formas_variantes`, `n_filas_formas_dominantes` y sus
+#'   `mostrados_formas_*`); si dos escrituras empatan en el primer lugar no hay
+#'   dominante y todas sus filas cuentan como variantes. Los dos informativos
+#'   que cuentan filas también las traen: `posible_ausencia_estructural`, las
+#'   ausentes que caen donde la regla dice que la columna no corresponde, y
+#'   `regla_silencia_ausencia`, las que la declaración del universo dejó de
+#'   contar.
+#'   `relacion_funcional_columnas` sale una vez por cada fila de `dependencias`
+#'   que no es exacta —cumplimiento en `[umbral_dependencia, 1)`—, y una por
+#'   sentido: `a -> b` y `b -> a` son dos hallazgos, porque en general los
+#'   rompen filas distintas. `columna` es `"determinante,dependiente"`, la
+#'   unidad es `fila`, `n_evaluados` y `n_afectados` son `n_evaluados` y
+#'   `n_violaciones` de la dependencia, y la evidencia repite su cumplimiento y
+#'   sus contradicciones. La traza enumera las filas que la rompen —las que
+#'   tienen las dos columnas presentes y un dependiente distinto del más
+#'   frecuente de su determinante; con empate en ese máximo, el que aparece
+#'   primero en la tabla—, su total es `n_afectados` y lleva `columnas`. Si las
+#'   dependencias se buscaron sobre una muestra, las filas son de la tabla
+#'   (`alcance = "completo"`) cuando la dependencia se recalculó sobre ella, y
+#'   de la muestra, en su posición de la tabla, cuando el presupuesto no
+#'   alcanzó (`alcance = "muestra_dependencias"`, lo mismo que sus cifras).
+#'   [planificar_limpieza()] no propone una acción para este hallazgo: va a
+#'   `hallazgos_sin_accion`. Que la relación sea una regla del negocio lo sabe
+#'   quien conoce los datos; si no lo es, no hay nada que corregir.
+#'   Para `patron_raro`,
 #'   el alcance puede ser `completo`, `muestra_patrones`,
 #'   `patrones_parciales` o `muestra_patrones+patrones_parciales`. El resumen y
 #'   el texto de evidencia de `patron_raro` muestran como maximo seis patrones,
 #'   pero la trazabilidad conserva los nombres de todos los patrones raros hasta
 #'   un limite de 5.000; `patrones_parciales` indica que se alcanzo ese limite,
 #'   no que se haya alcanzado el tope de presentacion.
+#'   En `faltantes_disfrazados`, la traza conserva además `sentinelas_contados`:
+#'   los centinelas numéricos que el perfil contó en la columna, sin repetir,
+#'   tomados de las mismas celdas que `n_faltantes_disfrazados_numericos`
+#'   —la evidencia muestra sólo las seis marcas más frecuentes—. Es la lista
+#'   que [planificar_limpieza()] convierte. Queda vacío si el hallazgo contó
+#'   sólo marcas textuales, y `NA` si la protección de datos personales tapó la
+#'   evidencia del hallazgo, entera o por valor: donde el perfil no muestra la
+#'   evidencia, tampoco dice qué valor contó. Un perfil guardado por una
+#'   versión anterior no trae el campo.
 #'   Cuando se emite un hallazgo `patron_raro`, su evidencia incluye la
 #'   proporcion del patron dominante y cuantas filas pertenecen a patrones no
 #'   dominantes que superan `umbral_patron_raro` y por eso quedan excluidos.
@@ -2708,7 +2801,11 @@
 #'   observada y el argumento que se puede ajustar.
 #'   Si el conteo y la traza no coinciden, conserva el hallazgo y emite una
 #'   advertencia de clase `lupa_trazabilidad_incoherente`. La guarda compara el
-#'   total previo al truncado y respeta la unidad declarada.
+#'   total previo al truncado y respeta la unidad declarada. Avisa también si
+#'   un hallazgo de formato o un informativo que cuenta filas se construye sin
+#'   nombrarlas, y si el reparto entre formas variantes y dominantes no suma el
+#'   total de la traza; un perfil guardado por una versión anterior, que traía
+#'   esos hallazgos sin filas, se publica sin ese aviso.
 #'   Una columna compuesta no analizada conserva en la traza todas sus filas. Si una
 #'   columna de listas se reconoce como constante pero no se puede contar su
 #'   frecuencia, el conteo afectado queda en NA y `cobertura_diagnosticos`
@@ -2938,9 +3035,15 @@ perfilar <- function(datos,
     .advertir_clave_declarada(evaluacion_clave)
   }
   .validar_sentinelas_numericos(sentinelas_numericos)
+  # La declaracion se lee como se leen los datos, por `.texto_analizable()`: una
+  # cadena sin marca con un byte que no es UTF-8 valido -copiada de un CSV en
+  # latin-1- hacia abortar `trimws()` en una sesion UTF-8. No es vacia: trae
+  # bytes. Queda declarada y no coincide con ningun texto analizado, igual que
+  # las celdas que la repiten, que se excluyen del analisis textual y se cuentan
+  # en `n_codificacion_invalida`.
   if (!is.null(cadenas_ausencia) &&
       (!is.character(cadenas_ausencia) || anyNA(cadenas_ausencia) ||
-       any(!nzchar(trimws(cadenas_ausencia))))) {
+       any(!nzchar(trimws(.texto_analizable(cadenas_ausencia)$valores))))) {
     .detener(
       "`cadenas_ausencia` debe ser un vector de texto sin ausentes ni cadenas ",
       "vac\u00edas.", call. = FALSE
@@ -3213,7 +3316,7 @@ perfilar <- function(datos,
   dependencias <- .medir_etapa_dbi(
     trazador_tiempos, "dependencias",
     if (analizar_dependencias) {
-      detectar_dependencias(
+      .detectar_dependencias_interno(
         datos_diagnostico, umbral = umbral_dependencia,
         muestra = muestra_diagnosticos,
         max_columnas = max_columnas_dependencias,
@@ -3222,7 +3325,9 @@ perfilar <- function(datos,
         max_trabajo = max_trabajo_dependencias,
         sentinelas_numericos = sentinelas_numericos,
         # El perfil se protege entero despues, con la declaracion del usuario.
-        proteger_datos_personales = FALSE
+        proteger_datos_personales = FALSE,
+        # Las filas que rompen cada dependencia casi exacta, para su hallazgo.
+        filas_rompen = TRUE, max_filas = max_filas_hallazgo
       )
     } else {
       # `datos[0, 0]` sobre un objeto `sf` conserva la geometria: la columna es
@@ -3239,6 +3344,12 @@ perfilar <- function(datos,
     },
     activa = analizar_dependencias
   )
+  # Las filas viajan en un atributo interno que no se publica: la tabla del
+  # perfil es la misma que devuelve `detectar_dependencias()`.
+  relaciones_funcionales <- .hallazgos_relacion_funcional(
+    dependencias, nombres_texto
+  )
+  attr(dependencias, "filas_rompen") <- NULL
 
   conteos_duplicados <- .conteos_filas_duplicadas(datos)
   n_filas_duplicadas <- conteos_duplicados$filas_duplicadas
@@ -3325,6 +3436,7 @@ perfilar <- function(datos,
     evaluacion_clave = evaluacion_clave,
     relaciones_orden = relaciones_orden$hallazgos,
     relaciones_aritmeticas = relaciones_aritmeticas$hallazgos,
+    relaciones_funcionales = relaciones_funcionales,
     normalizacion = normalizacion_resuelta,
     detectar_casi_duplicados = casi_duplicados_vocabulario,
     max_proporcion_grupo = max_proporcion_grupo_vocabulario,
@@ -3745,5 +3857,6 @@ perfilar <- function(datos,
     if (proteger_datos_personales) .proteger_perfil(estructura, datos) else estructura,
     activa = proteger_datos_personales
   )
-  estructura
+  # Despues de la proteccion, que puede rehacer las tablas.
+  .publicar_tablas_perfil(estructura)
 }

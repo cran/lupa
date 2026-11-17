@@ -42,7 +42,17 @@ viajan en \code{x$perfil_muestra$cobertura_diagnosticos}, con el esquema de
 alcance, o un vector nombrado con un conteo por tabla para una colección
 —los nombres son los de \code{resumen_coleccion$tabla}, en el orden de la tabla—.
 Devuelve
-\code{NA} con su motivo cuando el objeto no conoce el conteo. El significado de
+\code{NA} con su motivo cuando el objeto no conoce el conteo. Las tablas de
+\code{hallazgos()} y \code{cobertura()} llevan la clase \code{tabla_lupa} delante de
+\code{data.frame}, que sólo cambia cómo se imprimen: como la propuesta de
+\code{\link[=proponer_modelo]{proponer_modelo()}}, la impresión no aborta con un nombre de columna que no
+es UTF-8 válido, que va adentro de sus columnas-lista (\code{trazabilidad},
+\code{columnas}); los subconjuntos la conservan y \code{as.data.frame()} la quita.
+La traen también los campos de donde salen —\code{perfil$hallazgos} y
+\code{perfil$cobertura_diagnosticos}, y los de \code{perfil_muestra} en un
+\code{perfil_dbi}— y el atributo \code{cobertura_diagnosticos} del plan de
+\code{\link[=planificar_limpieza]{planificar_limpieza()}}, así que imprimirlos directo tampoco aborta.
+El significado de
 cada campo de \code{columnas()} se explica por familias en los detalles de
 \code{\link[=perfilar]{perfilar()}}. \code{sql_perfil()} devuelve la tabla de consultas emitidas;
 sobre una colección incluye la identidad de la tabla y conserva las

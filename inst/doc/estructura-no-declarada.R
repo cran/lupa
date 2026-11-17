@@ -36,9 +36,12 @@ claves[, c(
 )]
 
 ## ----relaciones-------------------------------------------------------------------------
-detectar_relaciones(
+relacion <- detectar_relaciones(
   personas["id_persona"], tramites["id_persona"], muestra = Inf
 )
+relacion[, c("columna_tabla1", "columna_tabla2", "cardinalidad",
+             "cobertura_tabla1_en_tabla2", "cobertura_tabla2_en_tabla1",
+             "n_filas_huerfanas_tabla1", "n_filas_huerfanas_tabla2")]
 
 ## ----dependencias-----------------------------------------------------------------------
 dependencias <- detectar_dependencias(

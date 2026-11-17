@@ -12,6 +12,15 @@
 .MODULO_CHECKSUM_SPOOL_DBI <- 1000003
 .RESERVA_TRAILER_SPOOL_DBI <- 4096
 
+# Lo que dice el resumen cuando no hay un perfil de la materializacion pedida.
+# Tiene dos puertas -el spool no se pudo leer y queda el perfil aislado, o se
+# leyo y el perfil de todas sus filas fallo- y un solo texto.
+.MOTIVO_RESUMEN_SIN_MATERIALIZACION_DBI <- paste(
+  "La materializaci\u00f3n completa fall\u00f3; el perfil aislado es s\u00f3lo",
+  "diagn\u00f3stico y no representa la materializaci\u00f3n solicitada.",
+  "Las m\u00e9tricas del resumen quedan no_disponible."
+)
+
 .validar_presupuesto_bytes_dbi <- function(x, nombre) {
   if (!is.numeric(x) || length(x) != 1L || is.na(x) || x < 1 ||
       (!is.infinite(x) && x != floor(x))) {
@@ -277,36 +286,6 @@
   )
 }
 
-# Helper de contrato: escribe una lista de data frames por chunks, sin conocer
-# el motor. Los jueces lo usan para probar trailer, checksum y presupuesto.
-.escribir_spool_muestra_dbi <- function(chunks, path = tempfile(
-    "lupa-spool-muestra-", fileext = ".bin"), campos = character(),
-    muestra_id = "muestra-1", snapshot_id = "snapshot-1",
-    orden_id = "orden-1", max_bytes = Inf, backend = "prueba",
-    sql = NA_character_) {
-  max_bytes <- .validar_presupuesto_bytes_dbi(max_bytes, "max_bytes")
-  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  escritor <- .abrir_spool_muestra_dbi(
-    path, campos, muestra_id, snapshot_id, orden_id, max_bytes, backend, sql
-  )
-  if (!isTRUE(escritor$ok)) return(c(escritor, list(path = path)))
-  escritor$path <- path
-  for (datos in chunks) {
-    escritor <- .escribir_chunk_spool_muestra_dbi(escritor, datos)
-    if (!is.null(escritor$motivo)) break
-  }
-  salida <- .cerrar_spool_muestra_dbi(escritor)
-  salida$path <- path
-  if (isTRUE(salida$ok)) {
-    verificada <- .leer_spool_muestra_dbi(path, devolver_chunks = FALSE)
-    if (!isTRUE(verificada$ok)) {
-      salida$ok <- FALSE
-      salida$motivo <- verificada$motivo
-    }
-  }
-  salida
-}
-
 .leer_spool_muestra_dbi <- function(path, devolver_chunks = TRUE) {
   if (!file.exists(path)) {
     return(list(ok = FALSE, motivo = "spool_incompleto:trailer_ausente"))
@@ -444,7 +423,10 @@
     if (length(campos) && length(tipos_motor) == length(campos)) {
       nombres_proyeccion <- vapply(as.character(campos), quote_texto, character(1L))
       binarios <- vapply(seq_along(campos), function(i) {
-        .es_tipo_binario_muestra_dbi(tipos_motor[[i]], senas)
+        .es_tipo_binario_muestra_dbi(
+          .atributo_columna_dbi(tipos_motor, campos[[i]], i) %||%
+            NA_character_, senas
+        )
       }, logical(1L))
       if (any(is.na(nombres_proyeccion))) {
         nombres_proyeccion <- character()
@@ -646,7 +628,6 @@
     )
   }
   max_filas <- as.numeric(max_filas)
-  bloque_maximo <- bloque_filas
   backend <- backend %||% .BACKEND_SPOOL_MUESTRA_DBI
   path <- tempfile("lupa-spool-muestra-", fileext = ".bin")
   resultado <- NULL
@@ -863,7 +844,7 @@
   )
 }
 
-.muestra_id_spool_dbi <- function(consulta_id = NULL) {
+.muestra_id_spool_dbi <- function() {
   # `consulta_id` identifica una sentencia, no la relacion que esta
   # materializa. Un token nuevo por spool evita que dos selecciones distintas
   # compartan rotulo cuando DBI reutiliza el contador o las corridas coinciden
@@ -879,13 +860,20 @@
     preparacion$prototipo, preparacion$tipos, preparacion$dialecto,
     tipos_motor = preparacion$esquema$tipos_motor
   )
-  fuente <- if (!is.null(candidato)) tryCatch(
-    .fuente_muestreada_dbi(
+  fuente <- if (!is.null(candidato)) {
+    captura <- .capturar_fuente_muestreada_dbi(
       preparacion$tabla_sql, proyeccion_muestra$campos_sql,
       preparacion$muestra_motor, preparacion$n_total,
       preparacion$dialecto, preparacion$muestreo
-    ), error = function(e) NULL
-  ) else NULL
+    )
+    captura$fuente
+  } else NULL
+  motivo_fuente <- if (!is.null(candidato) && is.null(fuente)) {
+    if (exists("captura", inherits = FALSE) &&
+        length(captura$motivo) == 1L && !is.na(captura$motivo)) {
+      captura$motivo
+    } else "capacidad_no_aceptada:fuente_muestreada"
+  } else NA_character_
   list(
     pagado = FALSE, seleccion_unica = 1L,
     backend = .BACKEND_SPOOL_MUESTRA_DBI,
@@ -896,6 +884,7 @@
     estado = "planificado", externo = TRUE,
     objetos_temporales_motor = FALSE,
     sql_seleccion = if (is.null(fuente)) NA_character_ else fuente$sql,
+    motivo_fuente = motivo_fuente,
     metodo = if (is.null(fuente)) NA_character_ else fuente$metodo,
     costo = list(sql = 1L, resultsets = 1L, fetches = NA_real_,
                  filas = preparacion$muestra_motor, bytes = NA_real_),
@@ -975,117 +964,19 @@
     alcance = .ALCANCE_TRAZA_ORDEN_INESTABLE, limite = limite
   )
   if (is.list(traza)) {
+    # `sentinelas_contados` tampoco nombra filas: dice que centinelas conto el
+    # detector en la columna, y el plan de limpieza lo lee. Sin el, el plan de
+    # una muestra de orden inestable volvia a la lista entera del catalogo.
     conteos <- c(
       "n_patrones_raros", "limite_patrones_raros_trazabilidad",
-      "n_filas_formas_variantes", "n_filas_formas_dominantes"
+      "n_filas_formas_variantes", "n_filas_formas_dominantes",
+      "sentinelas_contados"
     )
     for (campo in intersect(conteos, names(traza))) {
       retenida[[campo]] <- traza[[campo]]
     }
   }
   retenida
-}
-
-.resumen_muestra_desde_spool_dbi <- function(datos, campos, n_total,
-                                             metricas, materializacion,
-                                             muestreo, sql, consulta_id,
-                                             motivo_falla = NULL,
-                                             consulta_n = NULL) {
-  n_total_num <- .conteo_dbi(n_total)
-  n_conocido <- length(n_total_num) == 1L && is.finite(n_total_num)
-  motivo_n <- if (n_conocido) {
-    NA_character_
-  } else if (!is.null(consulta_n) && length(consulta_n$motivo) == 1L &&
-             !is.na(consulta_n$motivo) && nzchar(as.character(consulta_n$motivo))) {
-    as.character(consulta_n$motivo)
-  } else if (length(motivo_falla) == 1L && !is.na(motivo_falla) &&
-             nzchar(as.character(motivo_falla))) {
-    as.character(motivo_falla)
-  } else {
-    "No se pudo conocer `n` dentro del presupuesto de consultas."
-  }
-  estado_n <- if (n_conocido) "calculado" else "no_disponible"
-  filas <- lapply(campos, function(campo) .fila_resumen_dbi(campo, n_total_num))
-  columnas <- as.data.frame(do.call(rbind, lapply(filas, as.data.frame)),
-                            stringsAsFactors = FALSE)
-  if (is.null(datos)) datos <- data.frame()
-  perfil_columnas <- NULL
-  if (is.data.frame(attr(datos, "lupa_columnas_perfil", exact = TRUE))) {
-    perfil_columnas <- attr(datos, "lupa_columnas_perfil", exact = TRUE)
-  }
-  if (!is.null(perfil_columnas)) {
-    comunes <- intersect(names(columnas), names(perfil_columnas))
-    for (nombre in comunes) {
-      if (!identical(nombre, "n")) columnas[[nombre]] <- perfil_columnas[[nombre]]
-    }
-    columnas$n <- .conteo_dbi(n_total_num)
-    rownames(columnas) <- NULL
-  }
-  estado <- if (is.null(motivo_falla)) "observado_muestra" else "no_disponible"
-  motivo <- if (is.null(motivo_falla)) {
-    paste(
-      "Medido sobre la \u00fanica muestra materializada en el spool de sesi\u00f3n",
-      "cliente; todas las pasadas de esta salida leen esa relaci\u00f3n."
-    )
-  } else as.character(motivo_falla)
-  metadatos <- .metadatos_sql_dbi(
-    alcance = "muestra", universo = n_total_num,
-    tamano_muestra = if (is.null(muestreo)) NA_real_ else muestreo$filas_obtenidas,
-    fraccion = if (is.null(muestreo)) NA_real_ else muestreo$fraccion,
-    metodo = "spool_sesion_cliente", error_esperado = NA_character_,
-    id_consulta = consulta_id
-  )
-  metadatos$muestreo_regla <- if (is.null(muestreo)) {
-    list(disponible = FALSE)
-  } else muestreo
-  metadatos$fraccion_regla <- if (is.null(muestreo)) NA_real_ else
-    muestreo$fraccion
-  registros <- lapply(seq_along(campos), function(i) {
-    campo <- campos[[i]]
-    campos_metrica <- unlist(.CAMPOS_METRICA_DBI[metricas], use.names = FALSE)
-    if (!length(campos_metrica)) return(NULL)
-    motivo_metrica <- if (is.null(motivo_falla)) {
-      vapply(campos_metrica, function(nombre) {
-        .clasificar_metrica_muestreo_dbi(
-          nombre, metadatos$muestreo_regla, metadatos$fraccion_regla
-        )$motivo
-      }, character(1L))
-    } else {
-      rep_len(motivo, length(campos_metrica))
-    }
-    .registro_sql_dbi(
-      campo, campos_metrica, estado, motivo_metrica, sql,
-      metadatos = metadatos,
-      medicion = list(
-        consulta_id = consulta_id, etapa = "lectura_spool_muestra",
-        duracion_ms = NA_real_, n_filas_resultado = if (is.null(muestreo)) {
-          NA_real_
-        } else muestreo$filas_obtenidas,
-        bytes_resultado_r = materializacion$bytes, cpu_ms = NA_real_
-      )
-    )
-  })
-  sql_n <- .registro_sql_dbi(
-    campos, rep("n", length(campos)), estado_n, motivo_n,
-    if (is.null(muestreo)) NA_character_ else muestreo$sql_muestra,
-    metadatos = .metadatos_sql_dbi(
-      alcance = "tabla_completa", universo = n_total_num,
-      tamano_muestra = if (is.null(muestreo)) NA_real_ else muestreo$filas_obtenidas,
-      fraccion = if (is.null(muestreo)) NA_real_ else muestreo$fraccion,
-      metodo = "conteo_universo", error_esperado = "no_aplica",
-      id_consulta = if (is.null(muestreo)) NA_integer_ else muestreo$id_consulta_n
-    ),
-    medicion = list(
-      consulta_id = if (is.null(muestreo)) NA_integer_ else muestreo$id_consulta_n,
-      etapa = "conteo_filas"
-    )
-  )
-  sql <- if (length(Filter(Negate(is.null), registros))) {
-    do.call(rbind, c(list(sql_n), Filter(Negate(is.null), registros)))
-  } else sql_n
-  rownames(sql) <- NULL
-  list(columnas = columnas, sql = .marcar_nivel_sql_dbi(sql),
-       cobertura = .cobertura_dbi_vacia())
 }
 
 .perfil_muestra_spool_dbi <- function(conexion, tabla, preparacion,
@@ -1164,7 +1055,7 @@
   id_consulta_n <- if (!is.null(consulta_n)) {
     suppressWarnings(as.integer(consulta_n$consulta_id))
   } else NA_integer_
-  muestra_id <- .muestra_id_spool_dbi(id_consulta_n)
+  muestra_id <- .muestra_id_spool_dbi()
   snapshot_id <- paste0("spool-snapshot-", muestra_id)
   orden_id <- paste0("spool-ordinal-", .VERSION_SPOOL_MUESTRA_DBI)
   publico <- NULL
@@ -1179,16 +1070,17 @@
       motivo <- "capacidad_no_aceptada:sonda_muestreo"
     }
   } else {
-    fuente <- tryCatch(
-      .fuente_muestreada_dbi(
-        preparacion$tabla_sql, proyeccion_muestra$campos_sql,
-        filas_pedidas_motor, n_total, preparacion$dialecto,
-        preparacion$muestreo
-      ),
-      error = function(e) NULL
+    captura_fuente <- .capturar_fuente_muestreada_dbi(
+      preparacion$tabla_sql, proyeccion_muestra$campos_sql,
+      filas_pedidas_motor, n_total, preparacion$dialecto,
+      preparacion$muestreo
     )
+    fuente <- captura_fuente$fuente
     if (is.null(fuente)) {
-      motivo <- "capacidad_no_aceptada:fuente_muestreada"
+      motivo <- captura_fuente$motivo
+      if (length(motivo) != 1L || is.na(motivo) || !nzchar(motivo)) {
+        motivo <- "capacidad_no_aceptada:fuente_muestreada"
+      }
     } else {
       publico <- .publicar_muestreo_dbi(
         preparacion$muestreo, fuente, n_total
@@ -1341,13 +1233,17 @@
       metodo_reintento <- alternativa$nombre
       resolucion_reintento <- preparacion$muestreo
       resolucion_reintento$candidato <- alternativa
-      fuente_reintento <- tryCatch(
-        .fuente_muestreada_dbi(
-          preparacion$tabla_sql, proyeccion_muestra$campos_sql,
-          objetivo_reintento, n_total, preparacion$dialecto,
-          resolucion_reintento
-        ), error = function(e) NULL
+      captura_reintento <- .capturar_fuente_muestreada_dbi(
+        preparacion$tabla_sql, proyeccion_muestra$campos_sql,
+        objetivo_reintento, n_total, preparacion$dialecto,
+        resolucion_reintento
       )
+      fuente_reintento <- captura_reintento$fuente
+      if (is.null(fuente_reintento) &&
+          length(captura_reintento$motivo) == 1L &&
+          !is.na(captura_reintento$motivo)) {
+        motivo_reintento <- captura_reintento$motivo
+      }
       if (!is.null(fuente_reintento)) {
         reintentos_muestreo <- 1L
         publico_reintento <- .publicar_muestreo_dbi(
@@ -1521,7 +1417,9 @@
     "No se pudo conocer cu\u00e1ntas filas devolvi\u00f3 la muestra."
   }
   if (spool_valido) {
-    publico$fraccion_solicitada <- publico$fraccion
+    publico$fraccion_solicitada <- .fraccion_solicitada_muestreo_dbi(
+      preparacion$muestra_motor, n_total
+    )
     publico$fraccion <- .fraccion_muestreo_dbi(n_filas_spool, n_total)
   }
   if (grepl("^tablesample_", as.character(publico$metodo)) ||
@@ -1535,7 +1433,6 @@
   )
   recorte_celdas <- is.finite(alcance$filas_por_celdas) &&
     alcance$filas_por_celdas < filas_base
-  recorte_bytes_prelectura <- FALSE
   recorte_bytes <- isTRUE(spool$truncada)
   recorte_procesamiento <- FALSE
   recorte_topes <- recorte_celdas || recorte_bytes
@@ -1623,28 +1520,32 @@
       datos[0L, , drop = FALSE]
   }
   perfil <- perfil_aislado
-  # El perfil aislado sirve para el diagnostico de la muestra pedida, pero no
-  # representa la materializacion de `muestra_motor`: el resumen no reutiliza
-  # sus cifras ni publica una fraccion de otro universo.
-  perfil_resumen <- if (is.null(perfil_aislado)) perfil else NULL
-  motivo_metricas <- if (!is.null(perfil_aislado)) {
-    paste(
-      "La materializaci\u00f3n completa fall\u00f3; el perfil aislado es s\u00f3lo",
-      "diagn\u00f3stico y no representa la materializaci\u00f3n solicitada.",
-      "Las m\u00e9tricas del resumen quedan no_disponible."
-    )
+  # Las metricas del resumen se afirman solo sobre la materializacion que
+  # `muestra_motor` pidio. Hay dos puertas por las que no la hay, y las dos
+  # cierran igual -`no_disponible`, sin tamano ni fraccion de la muestra-:
+  # el spool no se pudo leer y lo que queda es el perfil aislado, otra lectura
+  # sin la columna rota (aca); o el spool se leyo y el perfil de todas sus
+  # filas fallo (mas abajo). Lo que cambia es que puede mostrar
+  # `resumen_tabla$columnas`. El aislado es una muestra entera de las columnas
+  # sanas, y una columna rota no les saca sus cuentas: se publican las de las
+  # filas que se perfilaron, con `n` igual a esas filas (ver donde se arma
+  # `columnas`). En la otra puerta lo unico perfilado es un recorte de un
+  # spool mas grande, y `n` queda sin dato.
+  resumen_sin_materializacion <- !is.null(perfil_aislado)
+  perfil_completo_fallido <- FALSE
+  perfil_resumen <- perfil
+  motivo_metricas <- if (resumen_sin_materializacion) {
+    .MOTIVO_RESUMEN_SIN_MATERIALIZACION_DBI
   } else if (is.null(motivo)) {
     paste(
       "Medido sobre la \u00fanica selecci\u00f3n materializada en el spool de sesi\u00f3n",
       "cliente; las pasadas de esta salida leen el mismo `muestra_id`."
     )
   } else as.character(motivo)
-  estado_metricas <- if (!is.null(perfil_aislado)) {
-    "no_disponible"
-  } else if (is.null(perfil)) {
+  estado_metricas <- if (resumen_sin_materializacion || is.null(perfil)) {
     "no_disponible"
   } else "observado_muestra"
-  tamano_muestra_metricas <- if (!is.null(perfil_aislado)) {
+  tamano_muestra_metricas <- if (resumen_sin_materializacion) {
     NA_real_
   } else publico$filas_obtenidas
   fraccion_muestra_metricas <- if (!is.null(perfil_aislado)) {
@@ -1735,6 +1636,8 @@
           do.call(perfilar, c(list(datos = datos_completos), args)),
           error = function(e) NULL
         )
+        perfil_completo_fallido <- is.null(perfil_resumen)
+        resumen_sin_materializacion <- perfil_completo_fallido
       } else {
         perfil_resumen <- perfil
       }
@@ -1764,7 +1667,7 @@
       proteger_spool <- .protege_argumentos(args)
       if (!is.null(perfil) && proteger_spool) {
         # Los valores protegidos de la muestra, para el mensaje del motor de las
-        # demas tablas de una coleccion: ver `.valores_motor()`.
+        # demas tablas de una coleccion: ver `.activar_valores_motor()`.
         tryCatch({
           protegidas <- .columnas_personales_protegidas(perfil$datos_personales)
           .sumar_valores_motor(
@@ -1827,6 +1730,16 @@
   if (recorte_procesamiento) {
     materializacion$motivo <- "muestra_inestable:presupuesto_procesamiento"
   }
+  if (recorte_bytes) {
+    cobertura <- rbind(cobertura, .registro_cobertura_dbi(
+      "resumen_tabla", .texto_tabla_dbi(tabla), "alcance_distinto",
+      paste(
+        "El resumen describe las filas que entraron al spool; la",
+        "materializaci\u00f3n qued\u00f3 recortada por el presupuesto de bytes."
+      ),
+      "Revisar `meta$materializacion` para el total pedido y el tope aplicado."
+    ))
+  }
   # Un reintento que recupera la muestra no avisa: lo que se pidio llego y la
   # escasez transitoria queda en `meta$muestreo` (`reintentos`,
   # `metodo_inicial`), como en la via de solo agregados. Si hay otro motivo de
@@ -1882,24 +1795,20 @@
   # estado aqui evita publicar `no_disponible` solo porque al entrar todavia no
   # existia el perfil local; si la materializacion completa fallo, en cambio,
   # la marca queda cerrada aunque el perfil aislado haya llegado.
-  motivo_metricas <- if (!is.null(perfil_aislado)) {
-    paste(
-      "La materializaci\u00f3n completa fall\u00f3; el perfil aislado es s\u00f3lo",
-      "diagn\u00f3stico y no representa la materializaci\u00f3n solicitada.",
-      "Las m\u00e9tricas del resumen quedan no_disponible."
-    )
+  motivo_metricas <- if (isTRUE(resumen_sin_materializacion)) {
+    .MOTIVO_RESUMEN_SIN_MATERIALIZACION_DBI
   } else if (is.null(motivo)) {
     paste(
       "Medido sobre la \u00fanica selecci\u00f3n materializada en el spool de sesi\u00f3n",
       "cliente; las pasadas de esta salida leen el mismo `muestra_id`."
     )
   } else as.character(motivo)
-  estado_metricas <- if (!is.null(perfil_aislado)) {
+  estado_metricas <- if (isTRUE(resumen_sin_materializacion)) {
     "no_disponible"
   } else if (is.null(perfil)) {
     "no_disponible"
   } else "observado_muestra"
-  tamano_muestra_metricas <- if (!is.null(perfil_aislado)) {
+  tamano_muestra_metricas <- if (isTRUE(resumen_sin_materializacion)) {
     NA_real_
   } else publico$filas_obtenidas
   fraccion_muestra_metricas <- if (!is.null(perfil_aislado)) {
@@ -1966,7 +1875,8 @@
   perfil_columnas <- if (!is.null(perfil_resumen) &&
                          is.data.frame(perfil_resumen$columnas)) {
     perfil_resumen$columnas
-  } else if (!is.null(perfil) && is.data.frame(perfil$columnas)) {
+  } else if (!perfil_completo_fallido && !is.null(perfil) &&
+             is.data.frame(perfil$columnas)) {
     perfil$columnas
   } else NULL
   if (!is.null(perfil_columnas) && is.data.frame(perfil_columnas)) {
@@ -1994,7 +1904,27 @@
       columnas$n_validos[[k]] <- nrow(datos_todos) - faltan
       columnas$prop_faltantes[[k]] <- faltan / nrow(datos_todos)
     }
-    columnas$n <- .conteo_dbi(n_total)
+    # `n` es el total de la tabla, como en la via de solo agregados y como
+    # dice la ayuda: las demas cuentas son de la muestra y se leen contra el.
+    # Eso supone que lo perfilado es la muestra que se pidio. Cuando no lo es
+    # -el spool quedo recortado por el presupuesto de bytes, o no se pudo leer
+    # y lo que hay es el perfil aislado-, el total de la tabla al lado de los
+    # validos de unas pocas filas se leia como una columna casi vacia: ahi `n`
+    # es la cantidad de filas perfiladas.
+    n_perfil <- suppressWarnings(as.numeric(perfil_columnas$n))
+    n_perfil <- n_perfil[is.finite(n_perfil)]
+    if (!length(n_perfil) && is.data.frame(datos)) {
+      n_perfil <- as.numeric(nrow(datos))
+    }
+    perfilado_parcial <- isTRUE(recorte_bytes) || !is.null(perfil_aislado)
+    columnas$n <- if (perfilado_parcial && length(n_perfil)) {
+      n_perfil[[1L]]
+    } else .conteo_dbi(n_total)
+  }
+  if (isTRUE(perfil_completo_fallido)) {
+    # El perfil corto sigue disponible como diagnostico, pero no midio el
+    # tamano de la materializacion completa que el resumen debia describir.
+    columnas$n <- NA_real_
   }
   if (!is.null(motivo_muestra_sin_filas)) {
     for (nombre in setdiff(names(columnas), c("columna", "n"))) {
@@ -2094,9 +2024,9 @@
       as.data.frame(.fila_resumen_dbi(campo, n_total), stringsAsFactors = FALSE)
     })))
     rownames(columnas) <- NULL
-    campos_metrica <- unlist(.CAMPOS_METRICA_DBI[metricas], use.names = FALSE)
+    campos_metrica <- unlist(.CAMPOS_METRICA_DBI[metricas_registro], use.names = FALSE)
     for (campo in ilegibles) {
-      if (!length(campos_metrica)) break
+      if (!length(campos_metrica)) next
       registros[[length(registros) + 1L]] <- .registro_sql_dbi(
         campo, campos_metrica, "no_disponible",
         preparacion$esquema$motivos[[campo]], NA_character_,
@@ -2107,6 +2037,32 @@
   }
   sql <- if (length(registros)) do.call(rbind, registros) else {
     .registro_sql_dbi(character(), character(), character(), character(), character())
+  }
+  # La lectura exacta de un DECIMAL ancho puede dejar el perfil local en
+  # `omitidos_precision`: hay extremos y conteos, pero no una media, mediana o
+  # desvio representables como doble. Si esas filas quedan con el motivo
+  # generico de ausencia, se pierde la causa que ya conoce el perfil.
+  if (is.data.frame(sql) && nrow(sql) && is.data.frame(perfil$columnas) &&
+      "estado_resumen_cuantitativo" %in% names(perfil$columnas)) {
+    for (campo in campos) {
+      posicion_campo <- .indice_nombre(
+        as.character(campo), as.character(perfil$columnas$columna)
+      )
+      tipo <- .atributo_columna_dbi(
+        preparacion$tipos, campo, match(campo, campos)
+      ) %||% NA_character_
+      if (is.na(posicion_campo) ||
+          !identical(as.character(perfil$columnas$estado_resumen_cuantitativo[[
+            posicion_campo
+          ]]), "omitidos_precision") ||
+          !.tipo_declarado_decimal_dbi(tipo)) next
+      tocar <- as.character(sql$columna) == campo &
+        as.character(sql$metrica) %in% c(
+          "minimo", "media", "mediana", "desvio"
+        ) & (is.na(sql$motivo) |
+               startsWith(as.character(sql$motivo), "La consulta termin"))
+      sql$motivo[tocar] <- .MOTIVO_DECIMAL_ANCHO_SPOOL_DBI
+    }
   }
   sql <- .marcar_nivel_sql_dbi(sql)
   if (!is.null(motivo)) {
@@ -2288,16 +2244,16 @@
   }
   for (columna in intersect(columnas, names(datos))) {
     posicion <- match(columna, names(datos))
-    tipo <- if (!is.null(tipos) && posicion <= length(tipos)) {
-      tipos[[posicion]]
-    } else NA_character_
-    x <- datos[[posicion]]
+    tipo <- .atributo_columna_dbi(tipos, columna, posicion) %||% NA_character_
+    x <- datos[[columna]]
+    texto <- if (columna %in% names(textos)) textos[[columna]] else
+      textos[[posicion]]
     if (!.tipo_decimal_o_moneda_dbi(tipo) || !is.double(x) ||
-        inherits(x, "integer64") || !is.character(textos[[posicion]])) {
+        inherits(x, "integer64") || !is.character(texto)) {
       next
     }
     salida[[columna]] <- .media_mediana_decimal_texto_dbi(
-      textos[[posicion]], x
+      texto, x
     )
   }
   salida

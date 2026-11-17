@@ -43,7 +43,7 @@
   )
 }
 
-.nuevo_entorno_acumulador <- function(familia, columna, tipo, configuracion,
+.nuevo_entorno_acumulador <- function(familia, configuracion,
                                       max_entradas = Inf,
                                       max_bytes = Inf,
                                       requiere_orden = FALSE,
@@ -98,7 +98,7 @@
     muestra_id, orden_id
   )
   acumulador <- .nuevo_entorno_acumulador(
-    familia, columna, tipo, configuracion, max_entradas, max_bytes,
+    familia, configuracion, max_entradas, max_bytes,
     requiere_orden, incluir_ausentes
   )
   es_indice <- familia %in% c("trazabilidad", "ejemplos", "muestra", "lsh")
@@ -490,31 +490,65 @@
   salida
 }
 
-.clave_identidad_R <- function(x) {
-  if (length(x) != 1L) {
-    .detener("La clave de identidad requiere un solo valor.", call. = FALSE)
-  }
-  es_integer64 <- inherits(x, "integer64")
-  es_na <- isTRUE(tryCatch(is.na(x), error = function(e) FALSE))
-  es_nan <- isTRUE(tryCatch(is.nan(x), error = function(e) FALSE))
-  clase <- class(x)
-  tipo <- if (length(clase)) paste(clase, collapse = "/") else typeof(x)
-  if (es_na && es_nan) {
-    return(list(tipo = tipo, clase = clase, categoria = "NaN",
-                valor = NA_real_))
-  }
-  if (es_na) {
-    return(list(tipo = tipo, clase = clase, categoria = "NA", valor = x))
-  }
-  if (!es_integer64 && is.double(x) && isTRUE(x == 0)) x <- 0
-  list(tipo = tipo, clase = clase, categoria = "valor", valor = x)
-}
-
 .append_typed_R <- function(x, valor) {
   if (!length(x)) return(valor)
   unidos <- .unificar_enteros_64_R(x, valor)
   if (is.null(unidos)) return(NULL)
   tryCatch(c(unidos$a, unidos$b), error = function(e) NULL)
+}
+
+# Lo que dejan `cuantos` llamadas seguidas a `.append_typed_R()` con
+# `nuevos[[1]]`, `nuevos[[2]]`, ..., armado en una sola union. Agregar de a uno
+# copia el vector entero por cada valor nuevo, y en un bloque con miles de
+# distintos eso era cuadratico. Da lo mismo porque `c()` es asociativo en las
+# clases que el mapa compara de una vez -sin clase, `factor`, `Date`, `POSIXct`,
+# `difftime` e `integer64`-: `c(c(a, b), d)` y `c(a, b, d)` son el mismo vector
+# con los mismos atributos. El primer valor de un mapa vacio no pasa por `c()`
+# (`.append_typed_R()` lo devuelve tal cual), y aca tampoco. Con otra clase -una
+# subclase puede traer su propio `c()`-, o si `c()` falla, devuelve `NULL` y quien
+# llama agrega de a uno, como antes.
+.unir_representantes_R <- function(representantes, nuevos, cuantos) {
+  tomados <- seq_len(cuantos)
+  clase <- oldClass(nuevos)
+  if (is.null(clase) && is.null(oldClass(representantes))) {
+    # `nuevos[[i]]` no trae nombres y `nuevos[tomados]` si.
+    return(.append_typed_R(representantes, unname(nuevos[tomados])))
+  }
+  conocidas <- list("factor", c("ordered", "factor"), "Date",
+                    c("POSIXct", "POSIXt"), "difftime", "integer64")
+  conocida <- any(vapply(conocidas, identical, logical(1L), clase))
+  if (!conocida ||
+      (length(representantes) && !identical(oldClass(representantes), clase))) {
+    return(NULL)
+  }
+  elementos <- lapply(tomados, function(i) nuevos[[i]])
+  if (!length(representantes)) {
+    if (cuantos == 1L) return(elementos[[1L]])
+    return(tryCatch(do.call(c, elementos), error = function(e) NULL))
+  }
+  tryCatch(
+    do.call(c, c(list(representantes), elementos)),
+    error = function(e) NULL
+  )
+}
+
+# El primer ordinal de cada valor nuevo del bloque. Los ordinales de un bloque
+# crecen estrictamente (`.registrar_intervalo_bloque()` lo exige), asi que el
+# menor de cada valor es el de su primera aparicion, y `match()` lo encuentra en
+# una pasada. `min(ordinales[correspondencias == i])` recorria el bloque entero
+# por cada valor nuevo. Si los ordinales no vinieran ordenados, o algun valor no
+# apareciera, se calcula como antes.
+.primeros_ordinales_nuevos <- function(ordinales, correspondencias, n_nuevos) {
+  primera <- match(seq_len(n_nuevos), correspondencias)
+  if (anyNA(primera) ||
+      !isFALSE(is.unsorted(ordinales, strictly = TRUE))) {
+    return(vapply(
+      seq_len(n_nuevos), function(i) {
+        min(ordinales[correspondencias == i])
+      }, numeric(1L)
+    ))
+  }
+  as.numeric(ordinales[primera])
 }
 
 # Un controlador puede entregar la misma columna con otra clase en cada bloque:
@@ -1955,7 +1989,6 @@
   aplica <- !is.na(bloque$aplicable) & bloque$aplicable
   if (!acumulador$incluir_ausentes) aplica <- aplica & !is.na(x)
   ordinales <- .ordinales_bloque(bloque)
-  indices <- which(aplica)
   ordinales <- ordinales[aplica]
   x <- x[aplica]
   if (!length(x)) {
@@ -2027,12 +2060,45 @@
       frecuencias_nuevas <- tabulate(
         correspondencias, nbins = length(nuevos)
       )
-      primeros_nuevos <- vapply(
-        seq_along(nuevos), function(i) {
-          min(ordinales[correspondencias == i])
-        }, numeric(1L)
+      primeros_nuevos <- .primeros_ordinales_nuevos(
+        ordinales, correspondencias, length(nuevos)
       )
       acumulador$estado_familia <- estado
+      # Los nuevos que caben en `max_entradas` se agregan de una vez si el
+      # estado con todos ellos no pasa de `max_bytes`. Agregar solo agranda el
+      # estado -cada vector suma un elemento y `object.size()` no baja con el
+      # largo-, asi que en ese caso ninguno de los pasos de a uno de abajo
+      # habria cortado por bytes, y el estado que queda es el mismo. Si pasa, el
+      # recorrido de a uno busca el valor donde corta, como siempre: una tabla
+      # que agota el tope lo sigue agotando en el mismo valor. Medir el estado
+      # entero y agrandarlo por cada valor nuevo era cuadratico en los
+      # distintos del bloque: un 10 a un 20 % de perfilar una tabla.
+      cabida <- min(
+        length(nuevos),
+        max(acumulador$max_entradas - length(estado$representantes), 0)
+      )
+      if (cabida > 0) {
+        tomados <- seq_len(cabida)
+        candidato <- estado
+        candidato$representantes <- .unir_representantes_R(
+          estado$representantes, nuevos, cabida
+        )
+        if (!is.null(candidato$representantes)) {
+          candidato$frecuencias <- c(
+            estado$frecuencias, frecuencias_nuevas[tomados]
+          )
+          candidato$primeros <- c(estado$primeros, primeros_nuevos[tomados])
+          acumulador$estado_familia <- candidato
+          if (.bytes_estado_acumulador(acumulador) <= acumulador$max_bytes) {
+            if (cabida == length(nuevos)) return(acumulador)
+            candidato$n_claves_omitidas <- candidato$n_claves_omitidas +
+              length(nuevos) - cabida
+            acumulador$estado_familia <- candidato
+            return(.marcar_tope_acumulador(acumulador, "entradas"))
+          }
+        }
+        acumulador$estado_familia <- estado
+      }
       for (i in seq_along(nuevos)) {
         if (length(estado$representantes) >= acumulador$max_entradas) {
           estado$n_claves_omitidas <- estado$n_claves_omitidas +
@@ -2123,6 +2189,10 @@
   if (!inherits(datos, "data.frame")) {
     .detener("La clave de fila requiere un data.frame.", call. = FALSE)
   }
+  # Dos filas son la misma si sus celdas son el mismo texto para el paquete,
+  # tambien cuando una celda llega `latin1` y la otra en UTF-8. Ver
+  # `.leer_latin1_sin_windows_1252()`.
+  datos <- .leer_latin1_sin_windows_1252_tabla(datos)
   columnas_matriciales <- vapply(
     datos,
     .es_columna_compuesta,
@@ -3056,8 +3126,6 @@
       ".sobre_lsh_acumulador", mode = "function")) {
     return(.sobre_lsh_acumulador(acumulador))
   }
-  exacto <- identical(acumulador$estado, "iniciado") ||
-    identical(acumulador$estado, "finalizado")
   estado <- if (identical(acumulador$estado, "no_disponible")) {
     "no_disponible"
   } else if (identical(acumulador$estado, "truncado")) {
@@ -3497,41 +3565,6 @@
   if (!inherits(vigilante, "vigilante_bloques")) return(NULL)
   vigilante$eventos
 }
-
-.conteos_filas_duplicadas_bloques <- function(datos, k = NULL,
-                                              max_entradas = Inf,
-                                              max_bytes = Inf) {
-  datos <- .expandir_datos_identidad(datos)
-  bloques <- .particionar_bloques(nrow(datos), k = k)
-  bloques <- lapply(bloques, function(bloque) {
-    bloque$valores <- datos[bloque$valores, , drop = FALSE]
-    bloque
-  })
-  acumulador <- .iniciar_acumulador(
-    "filas", "data.frame", familia = "filas_distintos",
-    max_entradas = max_entradas, max_bytes = max_bytes,
-    requiere_orden = TRUE
-  )
-  resultado <- .ejecutar_acumulador_bloques(acumulador, bloques)$resultado
-  if (!identical(resultado$estado, "calculado")) return(resultado)
-  mapa <- resultado$resultado
-  frecuencias <- mapa$frecuencias
-  list(
-    filas_duplicadas = as.integer(sum(frecuencias - 1L)),
-    filas_en_grupos_duplicados = as.integer(sum(frecuencias[frecuencias > 1L])),
-    estado = resultado$estado,
-    exacto = resultado$exacto,
-    mapa = mapa,
-    sobre = resultado
-  )
-}
-
-# Nombres del contrato, deliberadamente internos y no exportados.
-iniciar <- function(...) .iniciar_acumulador(...)
-absorber <- function(acumulador, bloque) .absorber_acumulador(acumulador, bloque)
-fusionar <- function(acumulador, otro) .fusionar_acumuladores(acumulador, otro)
-finalizar <- function(acumulador) .finalizar_acumulador(acumulador)
-bytes_retenidos <- function(acumulador) .bytes_retenidos(acumulador)
 
 # ---------------------------------------------------------------------------
 # Etapa 2: familias de VALOR
@@ -4160,31 +4193,6 @@ bytes_retenidos <- function(acumulador) .bytes_retenidos(acumulador)
 }
 
 .relacion_proporcional_bloques <- .k_aritmetica_bloques
-
-.relaciones_aritmeticas_bloques <- function(datos, columnas = NULL,
-                                            k = NULL, ...) {
-  if (!inherits(datos, "data.frame") || ncol(datos) < 2L) {
-    return(list())
-  }
-  if (is.null(columnas)) {
-    # La MISMA regla que el camino en memoria, no un `is.numeric` pelado. Este
-    # gemelo elegia columnas con un criterio mas debil -aceptaba fechas,
-    # `integer64` y columnas con dimensiones-, asi que la misma tabla podia
-    # recibir dos conjuntos de columnas segun por que camino se la perfilara.
-    columnas <- which(vapply(datos, .es_columna_aritmetica, logical(1L)))
-  }
-  if (length(columnas) < 2L) return(list())
-  pares <- utils::combn(columnas, 2L, simplify = FALSE)
-  nombres <- names(datos)
-  salida <- lapply(pares, function(par) {
-    .k_aritmetica_bloques(datos[[par[[1L]]]], datos[[par[[2L]]]],
-                          k_bloques = k, ...)
-  })
-  names(salida) <- vapply(pares, function(par) {
-    paste(nombres[par], collapse = " ~ ")
-  }, character(1L))
-  salida
-}
 
 .ejecutar_valor_bloques <- function(x, k = NULL, tamano = 10000L,
                                     aplicable = NULL,

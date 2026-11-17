@@ -194,8 +194,12 @@ test_that("H2: ninguna funcion del paquete llama a deparse() fuera de su envolto
 test_that("H3: con scipen negativo el piso no tapa los estadisticos de una columna no protegida", {
   anterior <- options(scipen = -9)
   on.exit(options(anterior), add = TRUE)
+  # La proteccion se pide: el piso solo corre con ella. Sin pedirla ninguna
+  # columna queda protegida, el piso no tapa nada y las cuatro cifras de
+  # `id_copia` salen igual, este el defecto o no.
   perfil <- perfilar(datos_administrativos, analizar_dependencias = FALSE,
-                     fecha = as.POSIXct("2026-01-15", tz = "UTC"))
+                     fecha = as.POSIXct("2026-01-15", tz = "UTC"),
+                     proteger_datos_personales = TRUE)
   fila <- columnas(perfil)[columnas(perfil)$columna == "id_copia", ]
   # A mano: id_copia = 1..10, 10, 1, 11; suma 77 en 13 valores; el 7.o
   # ordenado es 6; extremos 1 y 11.
@@ -405,14 +409,9 @@ test_that("H7: con scipen negativo las cifras publicadas como texto no salen en 
 
 test_that("H7: un duplicado aproximado publica su distancia y su umbral sin exponente", {
   skip_if_not_installed("stringdist")
-  # En macOS arm64 la distancia de dos textos iguales sale 3.3e-17 (ruido de coma
-  # flotante de stringdist) y se publica con exponente, aunque el par exacto
-  # deberia valer 0 por construccion. Mientras eso no se corrija, esta prueba no
-  # corre ahi.
-  if (identical(Sys.info()[["sysname"]], "Darwin") &&
-      identical(Sys.info()[["machine"]], "arm64")) {
-    skip("macOS arm64: la distancia de un par exacto no es 0")
-  }
+  # En macOS arm64 la distancia de dos textos iguales salia 3.3e-17 (ruido de
+  # coma flotante de stringdist); ahora el par igual vale 0 por construccion
+  # (test-distancia-par-igual-sin-ruido.R lo prueba con el ruido imitado).
   anterior <- options(scipen = -9)
   on.exit(options(anterior), add = TRUE)
   pares <- detectar_duplicados_aproximados(

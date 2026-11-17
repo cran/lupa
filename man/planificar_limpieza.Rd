@@ -43,8 +43,8 @@ acción seleccionada, incluso cuando una falla y las siguientes continúan.
 \code{n_codificacion_normalizada} cuenta, por acción, las celdas cuya \strong{marca de
 codificación} cambió: es el caso de una acción de texto sobre celdas
 \code{latin1}, cuyo valor se conserva y cuyos bytes no. No cuenta una celda sin
-marca cuyos bytes ya eran UTF-8 válido ni un texto ASCII, así que no
-depende del locale.
+marca cuyos bytes ya eran UTF-8 válido ni una celda que es o queda ASCII,
+así que no depende del locale.
 \code{n_no_reversibles} cuenta las celdas cuyo VALOR se perdió y no se puede
 recuperar desde el resultado: un centinela \code{-999} que pasa a ausencia, un
 extremo recortado a su límite, un marcador de ausencia convertido, o un
@@ -100,7 +100,13 @@ fija la secuencia reproducible. La acción \code{reparar_codificacion}, cuando e
 seleccionada, tiene precedencia sobre las demás acciones de su misma columna:
 corre primero en esa columna para que las restantes reciban texto ya
 decodificado, aunque su \code{orden} editado sea mayor. No reordena acciones de
-otras columnas. Entre las acciones restantes, y entre empates, el desempate lo resuelve
+otras columnas. Del mismo modo, \code{decodificar_entidades_html} corre antes que
+\code{convertir_minusculas}, \code{convertir_titulo} y \code{convertir_mayusculas} de su
+columna aunque un \code{orden} editado la ponga detrás: una entidad con nombre
+distingue mayúsculas —\verb{&eacute;} es «é» y \verb{&Eacute;} es «É»—, y cambiar la
+caja antes de decodificar cambiaba la letra o dejaba la entidad sin leer
+(\verb{&Amp;}). Con el \code{orden} del plan ya corre antes y nada se mueve.
+Entre las acciones restantes, y entre empates, el desempate lo resuelve
 \code{id_accion}, no la posición de la fila: reordenar el plan no cambia el
 resultado. Y un grupo marcado como \code{elegida} sin ninguna acción activa se
 rechaza, porque no es ni una elección ni una omisión. \code{n_afectadas} es la estimación del perfil
@@ -115,20 +121,47 @@ declara la acción cuando cuenta en una unidad propia, y sólo si no lo hace se
 hereda del hallazgo—. El registro informa \code{n_cambiadas} sobre los datos
 recibidos.
 
+Con un universo declarado, \code{n_afectadas} también cuenta lo que la acción va
+a cambiar. Las acciones por celda no tocan las filas que \code{aplicabilidad}
+deja fuera, y tampoco las cuentan. Una conversión de tipo
+cambia la columna entera —una columna tiene un solo tipo—, así que cuenta
+todos sus valores presentes: los del universo, los de fuera y los de las
+filas donde la regla no se pudo decidir. Las celdas vacías no se cuentan:
+fuera del universo están vacías por diseño, y en una columna de
+\code{columnas_opcionales} el universo son justamente las celdas con valor.
+Aplicada sola sobre los datos del perfil, la conversión registra en
+\code{n_cambiadas} lo que anunció.
+
 \strong{\code{n_afectadas} y \code{n_cambiadas} pueden no coincidir, y las dos son ciertas.}
 La estimación se calcula sobre los datos que se perfilaron; el registro
 cuenta lo que pasó al aplicar. Si una acción anterior del mismo plan ya tocó
-esa columna, la posterior encuentra menos —o más— de lo estimado. La única
-excepción de precedencia es \code{reparar_codificacion}, que se adelanta a las
-demás acciones de su columna para que ninguna opere sobre mojibake. Por
+esa columna, la posterior encuentra menos —o más— de lo estimado. Las
+excepciones de precedencia son dos: \code{reparar_codificacion}, que se adelanta a
+las demás acciones de su columna para que ninguna opere sobre mojibake, y
+\code{decodificar_entidades_html}, que se adelanta a las conversiones de caja. Por
 ejemplo, con
 \code{convertir_sentinelas_numericos} (orden 110) convirtiendo tres \code{-999} en
 ausentes, \code{winsorizar_outliers} (orden 520) recorta dos valores donde el plan
 estimaba siete. No es un desvío que ocultar: \code{orden}, \code{n_afectadas} y
 \code{n_cambiadas} se publican los tres, y compararlos es la forma de ver el
 efecto de la composición. Sólo el caso extremo —la acción no produce \strong{ningún}
-efecto —también cuando el plan no trae una estimación válida— se registra
-como \code{fallida} con su motivo.
+efecto, también cuando el plan no trae una estimación válida— se registra
+como \code{fallida} con su motivo, salvo que una acción anterior del mismo plan ya
+haya hecho su trabajo: si la misma detección con que el plan contó la acción
+encontraba el problema en los datos que recibió \code{aplicar()} y ya no lo
+encuentra cuando a la acción le toca correr, la acción queda \code{ejecutada} con
+\code{n_cambiadas = 0} y sin \code{error}, y el resumen impreso no la cuenta entre las
+fallidas. Por ejemplo, \code{convertir_ausencias_textuales} (orden 100) vuelve
+ausentes las celdas en blanco y a \code{recortar_espacios} (orden 200) no le
+queda nada que recortar en ellas. Esa detección existe para las acciones de
+texto que el perfil cuenta con \code{n_espacios_borde}, \code{n_invisibles_eliminables},
+\code{n_espacios_invisibles}, \code{n_entidades_html}, \code{n_separadores_en_campo} y
+\code{n_codificacion_reparable}: \code{recortar_espacios},
+\code{eliminar_controles_invisibles}, \code{normalizar_espacios_invisibles},
+\code{decodificar_entidades_html}, \code{reemplazar_separadores} y
+\code{reparar_codificacion}. Si el problema sigue en los datos y la acción no lo
+tocó, si nunca estuvo en los datos que recibió \code{aplicar()} —un plan aplicado
+a otra entrega— o si la acción no tiene esa detección, sigue \code{fallida}.
 
 \strong{Esa comparación sólo lee composición cuando las dos cifras cuentan en la
 misma unidad.} \code{n_afectadas} cuenta en la \code{unidad_conteo} que el plan
@@ -199,18 +232,36 @@ espera acción y no entra a ninguno de los dos. Los tres se imprimen con el
 plan.
 
 \code{convertir_numero_regional} sólo se recomienda si todos los valores
-presentes comparten convención decimal, unidad y moneda. Un valor con \verb{\%}
-se divide por 100 y queda como proporción en \verb{[0, 1]}, la escala con que el
-paquete publica toda proporción; una unidad o un símbolo de moneda dejan de
-formar parte del valor y quedan en \code{parametros}. La justificación lo dice
+presentes comparten convención decimal, unidad y moneda. En una columna que
+el perfil infiere como \code{identificador} (\verb{101a}, \verb{102a}) la acción queda
+\code{lista} sin activar: lo que acompaña al número puede ser parte del código.
+Un valor con \verb{\%} se divide por 100, la escala con que el paquete publica
+toda proporción; queda en \verb{[0, 1]} si el porcentaje estaba entre 0 y 100, y
+el plan no comprueba ese rango. Una unidad, o una moneda delante o detrás
+del número (\verb{$ 35}, \verb{1.234,56 $}), dejan de formar parte del valor y quedan
+en \code{parametros}. La justificación lo dice
 cuando ocurre. Una columna que mezcla \code{5} con \verb{5 \%} no se convierte: habría
-que decidir si el número sin \verb{\%} está en la misma escala.
+que decidir si el número sin \verb{\%} está en la misma escala. Esta conversión no
+lee la notación científica (\code{1e5}): si la columna la trae junto a números
+con formato regional, la acción queda \code{bloqueada}. \code{convertir_tipo} lee cada
+texto con la convención decimal de la columna, como el resumen del perfil:
+con coma decimal, \code{12.500} se convierte en doce mil quinientos.
 La acción de codificación prueba las tablas congeladas de varias
 codificaciones y deja en \code{estado_reparacion} uno de \code{reparado},
-\code{reparado_parcialmente} o \code{no_se_pudo}. Una reparación parcial —una celda que
-el motor repara sólo en parte— no se activa automáticamente: la acción queda
-\code{lista} con \code{aplicar = FALSE}, y se selecciona de forma explícita marcando
-\code{aplicar = TRUE}; entonces se aplican también las parciales. Una celda sin
+\code{reparado_parcialmente} o \code{no_se_pudo}: el de lo que la acción, tal como sale
+del plan, va a cambiar. Una reparación parcial —una celda que el motor repara
+sólo en parte— no se aplica automáticamente, pero tampoco frena la de las
+celdas que se reparan enteras. En una columna sin parciales, la acción sale
+activa —si nada más lo impide— y repara todas las celdas que el motor
+repara. En una columna con parciales y con celdas que se reparan enteras, la
+acción también sale activa, con \code{aplicar_parciales = FALSE} en
+\code{parametros}: repara las enteras, deja las
+parciales como están, \code{n_afectadas} cuenta sólo las enteras y la
+justificación dice cuántas parciales quedan; para aplicarlas también, se pone
+\code{aplicar_parciales = TRUE} en \code{parametros}. En una columna que sólo tiene
+parciales, la acción queda \code{lista} con \code{aplicar = FALSE} y
+\code{aplicar_parciales = TRUE}, y se selecciona de forma explícita marcando
+\code{aplicar = TRUE}; entonces se aplican las parciales. Una celda sin
 reparación local —con el carácter de reemplazo U+FFFD, o que el motor no
 pudo reparar— no frena la de las demás: queda como está y la justificación
 de la acción la cuenta. La estrategia se llama \code{reparar_codificacion} y no
@@ -229,7 +280,17 @@ perfil siguiente la sigue encontrando. Lo mismo si el motor no puede reparar
 la celda: sus letras rotas quedan como están. Los controles que la
 reparación deja como están, como un U+0081 suelto o un guion blando fuera de
 una letra rota, se diagnostican y se quitan, también en una celda con
-mojibake. El perfil cuenta un invisible sólo donde la acción puede quitarlo.
+mojibake, salvo que quitarlos vuelva reparable la celda: entonces la acción
+la deja como está, para que el resultado no dependa de si corre antes o
+después de \code{reparar_codificacion}. El perfil cuenta un invisible entre los
+que se pueden eliminar (\code{n_invisibles_eliminables}) sólo donde la acción
+puede quitarlo; el control que la acción deja así sigue contando en
+\code{n_controles_invisibles}, y si es el único el hallazgo dice que ninguna
+acción del plan lo quita, en vez de recomendar quitarlo. La reparación
+devuelve el texto que codificaban los bytes, y si ese texto trae un
+invisible —el mojibake de un U+200B se repara a un U+200B— el plan no lo
+quita en la misma pasada: el perfil describe los datos que recibió. El perfil
+del resultado lo señala, y su plan lo quita.
 Una celda cuyo texto no se puede leer —declarada \code{bytes} con bytes que no
 son UTF-8, o sin marca en una sesión UTF-8, que es lo que deja \code{\link[=read.csv]{read.csv()}}
 sin \code{fileEncoding} sobre un archivo latin1— no se transforma: el perfil no la
@@ -240,6 +301,19 @@ marca cuyos bytes son UTF-8 válido se trata como UTF-8 en cualquier locale,
 igual que en el perfil: con \code{LC_CTYPE=C} las acciones hacen lo mismo que en
 una sesión UTF-8.
 
+La protección de las acciones de texto se decide por una propiedad común,
+no por una lista de estrategias: en cada celda que el perfil señala como
+rota y reparable se comparan los dos órdenes de reparación y acción. Si no
+conmutan, la celda conserva su valor original y no cuenta entre las
+cambiadas. La comprobación se ejecuta sólo sobre las celdas que la acción
+iba a cambiar. El perfil cuenta con la misma regla: \code{n_afectadas} es lo que
+la acción sola puede cambiar, y el plan no la ofrece por las celdas que la
+protección le reserva (el espacio del borde que deja reconocer una letra
+rota no cuenta como \code{espacios_sobrantes}). La excepción es \code{entidades_html}:
+la entidad se informa aunque esté junto a una letra rota;
+\code{decodificar_entidades_html}, que no viene marcada, la decodifica después de
+la reparación y, sola, deja esa celda como está.
+
 Una celda \code{latin1} \strong{sí} se transforma —ahí R conoce la codificación y la
 convierte sin pérdida—, y el resultado queda marcado \code{UTF-8}. Como la acción
 toca sólo las celdas que cambia, una columna \code{latin1} puede quedar con marcas
@@ -248,8 +322,9 @@ valor es el mismo, pero los bytes no, así que el registro lo cuenta en
 \code{n_codificacion_normalizada} en vez de dejarlo implícito. Ese conteo es de
 recodificaciones, no de marcas: una celda sin marca cuyos bytes son UTF-8
 válido ya es UTF-8 y no cambia de codificación aunque la acción la devuelva
-marcada, y un texto ASCII se escribe igual en toda codificación —decodificar
-\code{Jos&eacute;} cambia el valor, no la codificación—. No se convierte la
+marcada, y un texto ASCII, el de entrada o el que queda, se escribe igual en
+toda codificación —decodificar \code{Jos&eacute;} o recortar un espacio duro del
+borde cambia el valor, no la codificación—. No se convierte la
 columna entera a propósito: eso tocaría celdas que el plan no declaró como
 cambiadas y haría mentir a \code{n_cambiadas} por el otro lado.
 Si se marca una acción que no está \code{lista}, \code{aplicar()} aborta antes de
@@ -267,15 +342,25 @@ ese costo de memoria.
 
 Los hallazgos \code{controles_invisibles}, \code{entidades_html} y \code{separadores_en_campo}
 tienen acciones separadas. La detección de invisibles informa tanto los
-caracteres que se pueden normalizar como los ZWJ/ZWNJ significativos; la
-normalización actúa sobre un conjunto más pequeño que la detección. La acción
+caracteres que se pueden normalizar como los que pueden ser parte del texto
+—ZWJ/ZWNJ y las etiquetas Unicode que arman banderas—; la normalización actúa
+sobre un conjunto más pequeño que la detección. La acción
 \code{eliminar_controles_invisibles} quita controles C0/C1 que no son separadores
-y los invisibles Unicode de transporte, y se recomienda por defecto; conserva
-ZWJ/ZWNJ. \code{normalizar_espacios_invisibles} colapsa espacios Unicode (incluido
+y los invisibles Unicode de transporte —también los operadores invisibles,
+los rellenos del hangul y la etiqueta de idioma U+E0001—, y se recomienda por
+defecto; conserva ZWJ/ZWNJ y las etiquetas de bandera.
+\code{normalizar_espacios_invisibles} colapsa espacios Unicode (incluido
 NBSP) a un espacio ASCII y, como su hermana, se recomienda y se activa por
 defecto: queda un espacio, así que el valor sigue ahí; si al colapsarlo dos
 valores que eran distintos quedan iguales, el registro lo cuenta en
-\code{n_no_reversibles}. \code{decodificar_entidades_html} cubre las entidades
+\code{n_no_reversibles}. Corre antes que \code{recortar_espacios}, así que el espacio
+común que deja en el borde lo quita el recorte. Para \code{recortar_espacios} y
+para \code{n_espacios_borde}, un espacio al borde es todo blanco ASCII —espacio,
+tabulación, salto de línea, tabulación vertical, avance de página y retorno—
+y todo separador de Unicode, como el espacio duro (U+00A0) o el fino
+(U+202F): los mismos que recortan los validadores. El espacio duro que es la
+mitad de una letra mal convertida no se cuenta ni se recorta.
+\code{decodificar_entidades_html} cubre las entidades
 con nombre comunes en español y referencias numéricas válidas, pero no se
 activa sola porque un ampersand puede ser contenido legítimo. Decodifica
 \strong{una capa}: un texto codificado dos veces —\verb{&amp;amp;}— queda en \verb{&amp;},
@@ -291,7 +376,7 @@ U+2029 son de \code{normalizar_espacios_invisibles} y el control U+0085 de
 ningún byte de un carácter multibyte. Las tres acciones
 registran el número de valores cambiados. Una comparación aproximada con
 \code{normalizar = TRUE} usa estas mismas clases: colapsa espacios y omite basura
-de transporte, pero conserva ZWJ/ZWNJ.
+de transporte, pero conserva ZWJ/ZWNJ y las etiquetas.
 
 Las imputaciones por dependencia funcional se ofrecen desactivadas. Aunque
 una dependencia exacta permite deducir un valor sin usar media, moda o un
@@ -422,16 +507,39 @@ y \code{aplicar()} registraría \code{fallida} la acción recomendada.
 
 \code{convertir_sentinelas_numericos} convierte los números de
 \code{parametros$valores}. El plan arma la lista con los centinelas que el perfil
-contó en esa columna y con los que se declararon en \code{sentinelas_numericos}:
+contó en esa columna —los que la traza del hallazgo publica en
+\code{sentinelas_contados}— y con los que se declararon en \code{sentinelas_numericos}:
 un \code{999} dentro de una numeración de 1 a 2000 no es un centinela para
 \code{\link[=perfilar]{perfilar()}}, y la acción no lo convierte. Así, aplicada a los datos del
-perfil, cambia las celdas que \code{n_afectadas} anuncia. La lista se lee de la
-evidencia del hallazgo, que muestra las marcas más frecuentes: si la
-evidencia no alcanza a nombrar todo lo contado —una columna de texto con
-muchas marcas de ausencia distintas—, la lista es el catálogo entero y
-conviene revisarla antes de marcar la acción. También es el catálogo entero
-cuando el perfil se hizo con \code{proteger_datos_personales = TRUE}. Editarla es
-una decisión del usuario, como en la acción de las ausencias textuales.
+perfil, cambia exactamente las celdas que \code{n_afectadas} anuncia. Una celda
+que el perfil contó como marca textual declarada en \code{cadenas_ausencia} —un
+\code{"999"} con \code{cadenas_ausencia = "999"}— es de \code{convertir_ausencias_textuales},
+y esta acción no la toca aunque se lea como uno de sus números. La acción
+trabaja sobre números, texto, factores, duraciones (\code{difftime}) y medidas con
+unidad (\code{units}), y conserva la clase y la unidad de la columna. Editar la
+lista es una decisión del usuario, como en la acción de las ausencias
+textuales.
+
+Sobre otros datos —otra entrega de la misma tabla— la lista manda: la acción
+convierte esos valores y ningún otro. Si la otra entrega usa otro código, la
+acción termina \code{fallida} sin cambiar celdas, y hay que volver a perfilar o
+agregar el código a \code{valores}.
+
+En dos casos el plan no sabe qué centinelas contó el perfil: un perfil
+guardado por una versión anterior, cuya traza no trae el campo, y un
+hallazgo cuya evidencia tapó la protección de datos personales, porque el
+perfil no publica ahí qué valor contó. Entonces \code{valores} es la lista entera
+de centinelas del perfil, la justificación lo dice, y la acción lleva en
+\code{parametros$guarda} el contexto con que el perfil decidió —el tipo inferido,
+la convención decimal y las banderas de la numeración—. Al aplicar, convierte
+sólo los centinelas de esa lista que el mismo detector cuenta en los datos
+que recibe, que pueden ser menos, y nunca un valor que no esté en \code{valores};
+lo que el usuario agregue a \code{valores} se convierte sin acotar. Sobre los
+datos del perfil convierte lo contado. Sobre otra entrega decide con esos
+datos, y puede convertir un centinela de la lista que el perfil de origen no
+había contado: es el límite de estos dos casos. Si el perfil contó dentro de
+un universo declarado en \code{aplicabilidad}, la acción necesita la regla que el
+plan le copia para acotar: sin ella termina \code{fallida} y dice por qué.
 }
 \examples{
 datos <- data.frame(categoria = c(" A", "S/D", "B"))

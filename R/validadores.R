@@ -69,13 +69,6 @@
   ), " ", fixed = TRUE
 )[[1L]]
 
-# Mayusculas sobre las letras ASCII y nada mas. `toupper()` sigue al locale y
-# lleva `ſ` a `S` e `ı` a `I`: `validar_iso3166("ſe")` daba TRUE en una sesion
-# UTF-8 y FALSE bajo C, la misma cadena con dos respuestas.
-.mayusculas_ascii <- function(x) {
-  chartr(paste(letters, collapse = ""), paste(LETTERS, collapse = ""), x)
-}
-
 .texto_validador <- function(x, recortar = TRUE) {
   if (!is.atomic(x) || is.list(x)) {
     .detener("`x` debe ser un vector at\u00f3mico.", call. = FALSE)
@@ -157,7 +150,16 @@
 # solo `[ \t\r\n]`, y el espacio duro (U+00A0) que dejan una planilla o una
 # pagina web volvia invalida una cedula valida mientras el tabulador se
 # recortaba. Mismo conjunto que la proteccion ya trata como espacio: los
-# separadores de Unicode (`\p{Z}`) y los blancos de ASCII.
+# separadores de Unicode (`\p{Z}`) y los blancos de ASCII (9 a 13 y el 32).
+#
+# Es la UNICA definicion de espacio al borde del paquete: la usan tambien el
+# conteo del perfil (`n_espacios_borde`) y la accion `recortar_espacios`
+# (`.recortar_borde_texto()`). El perfil contaba con `trimws()` y la accion
+# recortaba con `trimws()`, asi que un espacio duro al borde no era un espacio
+# al borde, y `normalizar_espacios_invisibles` lo convertia en uno comun que ya
+# nadie recortaba: aplicar el plan dejaba espacios al borde. Los espacios
+# Unicode de este conjunto son exactamente los que esa accion convierte
+# (`.codigos_espacios_invisibles`); una prueba lo sostiene.
 .recortar_espacios_borde <- function(x) {
   gsub("^[\\s\\p{Z}]+|[\\s\\p{Z}]+$", "", x, perl = TRUE)
 }

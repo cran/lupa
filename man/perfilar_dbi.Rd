@@ -616,7 +616,12 @@ que el motor acepte o se degrada con su motivo (limitación conocida). Con odbc 
 rechazada por un permiso de columna dejaría la conexión rota y la siguiente
 haría caer a R. Lo que el catálogo no ve —un sinónimo, una tabla de otra
 base, una tabla temporal— se intenta leer: el rechazo del motor se declara
-y la conexión sigue.
+y la conexión sigue. Y como entonces no se sabe qué columnas llegan
+enmascaradas, una fila \code{degradado} de \code{resumen_tabla$cobertura} sobre la tabla
+lo declara —también si sólo falló la consulta de \code{sys.masked_columns}—, y
+\code{resumen_tabla$meta$permisos_sin_consultar} dice qué parte no contestó (\code{"columnas"} o
+\code{"mascaras"}): una columna enmascarada de esa tabla se mide como si la
+máscara fuera el valor.
 Con enmascaramiento dinámico de SQL Server (\verb{MASKED WITH}, 2016+) y una
 credencial sin \code{UNMASK} sobre la columna o la base, el motor devuelve la
 máscara y no el dato. La completitud de esa columna se publica —los no nulos
@@ -794,6 +799,11 @@ Esto no permite concluir que la columna esté vacía, por lo que no se publica
 cero ni se dispara la cascada \code{sin_valores}. Una muestra no vacía sin valores
 válidos usa \code{muestra_inestable:sin_valores_validos}; una capacidad no aceptada
 usa \code{capacidad_no_aceptada:...}. \code{n} conserva el conteo de la tabla completa.
+Hay dos excepciones, en las que lo perfilado no es la muestra pedida: si la
+materialización queda recortada por \code{max_bytes_materializacion}, o si no se
+puede leer y lo que queda es el perfil aislado de las columnas legibles, \code{n}
+es la cantidad de filas perfiladas, para que las demás cuentas se lean contra
+ellas y no contra el total de la tabla.
 
 Con \code{bloque_muestra = "solo_agregados"} cada sentencia sobre la muestra del
 motor sortea la suya. Lo que decide los agregados de una columna -la cuenta

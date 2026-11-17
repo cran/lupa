@@ -426,14 +426,17 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <div id="una-relación-entre-dos-tablas" class="section level2">
 <h2>Una relación entre 2 tablas</h2>
 <p><code>id_persona</code> también está en <code>tramites</code>, y ahí se repite: una persona puede tener más de un trámite. <code>detectar_relaciones()</code> recibe las 2 columnas de identificación y compara sus valores:</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true"></a><span class="kw">detectar_relaciones</span>(</span>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true"></a>relacion &lt;-<span class="st"> </span><span class="kw">detectar_relaciones</span>(</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true"></a>  personas[<span class="st">&quot;id_persona&quot;</span>], tramites[<span class="st">&quot;id_persona&quot;</span>], <span class="dt">muestra =</span> <span class="ot">Inf</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true"></a>)</span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true"></a><span class="co">#&gt;   columna_tabla1 columna_tabla2 cardinalidad n_valores_comunes cobertura_tabla1_en_tabla2</span></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true"></a><span class="co">#&gt; 1     id_persona     id_persona          1:m                 8                          1</span></span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true"></a><span class="co">#&gt;   cobertura_tabla2_en_tabla1 motivo_poda</span></span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true"></a><span class="co">#&gt; 1                          1        &lt;NA&gt;</span></span></code></pre></div>
-<p>La cardinalidad es 1:m, uno a muchos. Las 2 coberturas valen 1 porque todos los identificadores de cada lado aparecen en el otro. No hay trámites de personas que no estén en <code>personas</code>, ni personas sin trámites. <code>muestra = Inf</code> deja explícito que se comparan todos los valores.</p>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true"></a>relacion[, <span class="kw">c</span>(<span class="st">&quot;columna_tabla1&quot;</span>, <span class="st">&quot;columna_tabla2&quot;</span>, <span class="st">&quot;cardinalidad&quot;</span>,</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true"></a>             <span class="st">&quot;cobertura_tabla1_en_tabla2&quot;</span>, <span class="st">&quot;cobertura_tabla2_en_tabla1&quot;</span>,</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true"></a>             <span class="st">&quot;n_filas_huerfanas_tabla1&quot;</span>, <span class="st">&quot;n_filas_huerfanas_tabla2&quot;</span>)]</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true"></a><span class="co">#&gt;   columna_tabla1 columna_tabla2 cardinalidad cobertura_tabla1_en_tabla2</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true"></a><span class="co">#&gt; 1     id_persona     id_persona          1:m                          1</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true"></a><span class="co">#&gt;   cobertura_tabla2_en_tabla1 n_filas_huerfanas_tabla1 n_filas_huerfanas_tabla2</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true"></a><span class="co">#&gt; 1                          1                        0                        0</span></span></code></pre></div>
+<p>La cardinalidad es 1:m, uno a muchos. Las 2 coberturas valen 1 porque todos los identificadores de cada lado aparecen en el otro. No hay trámites de personas que no estén en <code>personas</code>, ni personas sin trámites: por eso las filas huérfanas de cada lado son 0. Cuando no lo son, <code>huerfanas_tabla1</code> y <code>huerfanas_tabla2</code> dicen cuáles son, por su número de fila. <code>muestra = Inf</code> deja explícito que se comparan todos los valores.</p>
 </div>
 <div id="una-dependencia-dentro-de-una-tabla" class="section level2">
 <h2>Una dependencia dentro de una tabla</h2>
@@ -448,7 +451,7 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <span id="cb4-8"><a href="#cb4-8" aria-hidden="true"></a><span class="co">#&gt; 1       ciudad departamento            1           8        4             0   TRUE</span></span>
 <span id="cb4-9"><a href="#cb4-9" aria-hidden="true"></a><span class="co">#&gt;   evidencia</span></span>
 <span id="cb4-10"><a href="#cb4-10" aria-hidden="true"></a><span class="co">#&gt; 1</span></span></code></pre></div>
-<p><code>perfilar()</code> busca las mismas dependencias por su cuenta (<code>analizar_dependencias = TRUE</code>, el valor por omisión) y las deja en <code>perfil$dependencias</code>. Una dependencia exacta permite además imputar un valor faltante desde los propios datos, como se ve en <a href="limpiar-con-un-plan.html">6. Limpiar con un plan</a>.</p>
+<p><code>perfilar()</code> busca las mismas dependencias por su cuenta (<code>analizar_dependencias = TRUE</code>, el valor por omisión) y las deja en <code>perfil$dependencias</code>. Una que casi se cumple aparece además entre los hallazgos, como <code>relacion_funcional_columnas</code>, con las filas que la rompen en su <code>trazabilidad</code>. Una dependencia exacta permite además imputar un valor faltante desde los propios datos, como se ve en <a href="limpiar-con-un-plan.html">6. Limpiar con un plan</a>.</p>
 </div>
 <div id="lo-que-se-cumple-no-es-una-regla" class="section level2">
 <h2>⚠️ Lo que se cumple no es una regla</h2>
@@ -464,7 +467,7 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <h2>Resumen</h2>
 <ul>
 <li><code>detectar_claves()</code> encuentra las columnas que identifican cada fila en esta entrega: son candidatas, no claves.</li>
-<li><code>detectar_relaciones()</code> compara 2 columnas de identificación y publica la cardinalidad y la cobertura de cada lado.</li>
+<li><code>detectar_relaciones()</code> compara 2 columnas de identificación y publica la cardinalidad, la cobertura de cada lado y cuántas filas quedan huérfanas, y cuáles.</li>
 <li><code>detectar_dependencias()</code> encuentra columnas que determinan a otras; <code>perfilar()</code> las busca por su cuenta.</li>
 <li>Lo que los datos cumplen hoy lo confirma la documentación del sistema, no el paquete.</li>
 </ul>

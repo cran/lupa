@@ -77,7 +77,11 @@ reproducibles; se normaliza a UTC.}
 
 \item{muestra}{Máximo de filas usadas para patrones, inferencia de tipos,
 formatos de fecha y dependencias funcionales. Use \code{Inf} para analizar todas
-las filas en esos análisis.}
+las filas en esos análisis.
+La muestra se toma por posición, así que en una tabla de más filas lo
+que se mide sobre ella depende del orden de las filas: la misma tabla
+leída de una base sin \verb{ORDER BY} puede dar dos perfiles distintos en dos
+lecturas. Para un perfil reproducible, leerla ordenada por una clave.}
 
 \item{max_patrones}{Máximo de patrones mostrados por columna.}
 
@@ -287,9 +291,13 @@ de \code{\link[=normalizacion]{normalizacion()}}: \verb{SIN INFORMACIÓN} es \ve
 locale.}
 
 \item{analizar_dependencias}{Si se buscan dependencias funcionales entre
-pares de columnas. Se aplica una sola muestra común a toda la tabla.}
+pares de columnas. Se aplica una sola muestra común a toda la tabla. Una
+dependencia publicada que no es exacta es además el hallazgo
+\code{relacion_funcional_columnas}, con las filas que la rompen.}
 
-\item{umbral_dependencia}{Cumplimiento mínimo para informar una dependencia.}
+\item{umbral_dependencia}{Cumplimiento mínimo para informar una dependencia.
+Una informada con cumplimiento menor que 1 es también un hallazgo
+\code{relacion_funcional_columnas}.}
 
 \item{umbral_casi_clave_dependencia}{Tasa de valores distintos a partir de
 la cual un determinante se descarta como casi-clave antes de agrupar.}
@@ -1095,14 +1103,63 @@ con el reparto de lo que sobrevivió al truncado. En los tres diagnósticos
 de unidad \code{valor_distinto} las filas de las formas variantes se entregan
 primero —en \code{mayusculas_inconsistentes} y \code{normalizacion_unicode}, la forma
 dominante de cada grupo es la guardada más veces—, de modo que el truncado
-no se lleve lo accionable. Para
-\code{patron_raro},
+no se lleve lo accionable.
+En los tres hallazgos de unidad \code{formato} (\code{formatos_fecha_mixtos},
+\code{formato_fecha_ambiguo} y \code{anio_de_dos_digitos}), \code{n_afectados} cuenta
+formatos y la traza enumera filas; por eso su total no se compara con
+\code{n_afectados}. La traza se arma sobre la columna entera aunque la tabla de
+formatos, la evidencia y \code{n_afectados} sean de una muestra, y puede nombrar
+filas escritas en formatos que la muestra no llegó a ver; esa segunda
+lectura se hace sólo cuando alguno de los tres hallazgos sale, una vez por
+columna. \code{anio_de_dos_digitos} traza toda fila cuya escritura sólo admite
+lecturas con el año de dos cifras, incluidas las que dos lecturas probadas
+aceptan y por eso no cuenta el \code{n} de ninguna; su total puede ser mayor
+que la suma de los \code{n} de \code{formatos_fecha}. \code{formato_fecha_ambiguo} traza
+toda fila escrita en una lectura que la columna entera no puede resolver
+(si la columna entera las resuelve todas, las celdas que admiten dos o más
+de las lecturas que cita). \code{formatos_fecha_mixtos} traza todas las
+filas con fecha, primero las de las escrituras que no son la más
+frecuente, con el mismo reparto que \code{casi_duplicados_vocabulario}
+(\code{n_filas_formas_variantes}, \code{n_filas_formas_dominantes} y sus
+\verb{mostrados_formas_*}); si dos escrituras empatan en el primer lugar no hay
+dominante y todas sus filas cuentan como variantes. Los dos informativos
+que cuentan filas también las traen: \code{posible_ausencia_estructural}, las
+ausentes que caen donde la regla dice que la columna no corresponde, y
+\code{regla_silencia_ausencia}, las que la declaración del universo dejó de
+contar.
+\code{relacion_funcional_columnas} sale una vez por cada fila de \code{dependencias}
+que no es exacta —cumplimiento en \verb{[umbral_dependencia, 1)}—, y una por
+sentido: \code{a -> b} y \code{b -> a} son dos hallazgos, porque en general los
+rompen filas distintas. \code{columna} es \code{"determinante,dependiente"}, la
+unidad es \code{fila}, \code{n_evaluados} y \code{n_afectados} son \code{n_evaluados} y
+\code{n_violaciones} de la dependencia, y la evidencia repite su cumplimiento y
+sus contradicciones. La traza enumera las filas que la rompen —las que
+tienen las dos columnas presentes y un dependiente distinto del más
+frecuente de su determinante; con empate en ese máximo, el que aparece
+primero en la tabla—, su total es \code{n_afectados} y lleva \code{columnas}. Si las
+dependencias se buscaron sobre una muestra, las filas son de la tabla
+(\code{alcance = "completo"}) cuando la dependencia se recalculó sobre ella, y
+de la muestra, en su posición de la tabla, cuando el presupuesto no
+alcanzó (\code{alcance = "muestra_dependencias"}, lo mismo que sus cifras).
+\code{\link[=planificar_limpieza]{planificar_limpieza()}} no propone una acción para este hallazgo: va a
+\code{hallazgos_sin_accion}. Que la relación sea una regla del negocio lo sabe
+quien conoce los datos; si no lo es, no hay nada que corregir.
+Para \code{patron_raro},
 el alcance puede ser \code{completo}, \code{muestra_patrones},
 \code{patrones_parciales} o \code{muestra_patrones+patrones_parciales}. El resumen y
 el texto de evidencia de \code{patron_raro} muestran como maximo seis patrones,
 pero la trazabilidad conserva los nombres de todos los patrones raros hasta
 un limite de 5.000; \code{patrones_parciales} indica que se alcanzo ese limite,
 no que se haya alcanzado el tope de presentacion.
+En \code{faltantes_disfrazados}, la traza conserva además \code{sentinelas_contados}:
+los centinelas numéricos que el perfil contó en la columna, sin repetir,
+tomados de las mismas celdas que \code{n_faltantes_disfrazados_numericos}
+—la evidencia muestra sólo las seis marcas más frecuentes—. Es la lista
+que \code{\link[=planificar_limpieza]{planificar_limpieza()}} convierte. Queda vacío si el hallazgo contó
+sólo marcas textuales, y \code{NA} si la protección de datos personales tapó la
+evidencia del hallazgo, entera o por valor: donde el perfil no muestra la
+evidencia, tampoco dice qué valor contó. Un perfil guardado por una
+versión anterior no trae el campo.
 Cuando se emite un hallazgo \code{patron_raro}, su evidencia incluye la
 proporcion del patron dominante y cuantas filas pertenecen a patrones no
 dominantes que superan \code{umbral_patron_raro} y por eso quedan excluidos.
@@ -1113,7 +1170,11 @@ el hallazgo: \code{cobertura_diagnosticos} declara la no medicion, su proporcion
 observada y el argumento que se puede ajustar.
 Si el conteo y la traza no coinciden, conserva el hallazgo y emite una
 advertencia de clase \code{lupa_trazabilidad_incoherente}. La guarda compara el
-total previo al truncado y respeta la unidad declarada.
+total previo al truncado y respeta la unidad declarada. Avisa también si
+un hallazgo de formato o un informativo que cuenta filas se construye sin
+nombrarlas, y si el reparto entre formas variantes y dominantes no suma el
+total de la traza; un perfil guardado por una versión anterior, que traía
+esos hallazgos sin filas, se publica sin ese aviso.
 Una columna compuesta no analizada conserva en la traza todas sus filas. Si una
 columna de listas se reconoce como constante pero no se puede contar su
 frecuencia, el conteo afectado queda en NA y \code{cobertura_diagnosticos}
@@ -1537,12 +1598,18 @@ del dominio ni autoriza una corrección.
 Los valores de texto que no forman UTF-8 válido tampoco se convierten: se
 cuentan, se excluyen de los análisis textuales y generan un hallazgo con sus
 posiciones. Los diagnósticos de invisibles incluyen controles C0/C1,
-espacios Unicode, marcas direccionales, BOM y otros caracteres de transporte.
+espacios Unicode, marcas direccionales, BOM y otros caracteres de transporte:
+los operadores invisibles de la matemática (U+2061 a U+2064), los controles
+de formato en desuso (U+206A a U+206F), los rellenos del hangul (U+115F,
+U+1160, U+3164 y U+FFA0) y la etiqueta de idioma U+E0001.
 La evidencia los muestra como puntos de código; los espacios Unicode se
 detectan aunque sólo se normalizan mediante una acción explícita, y ZWJ/ZWNJ
-se informan pero se conservan porque pueden ser semánticos. La comparación
-de duplicados con \code{normalizar = TRUE} aplica estas mismas clases sin borrar
-ZWJ/ZWNJ. El resto del texto se cita con sus caracteres, y no con los
+(en \code{n_invisibles_significativos}) y las etiquetas Unicode (U+E0020 a
+U+E007F, las que arman banderas como la de Escocia; sólo en
+\code{n_controles_invisibles}) se informan pero se conservan porque pueden ser
+semánticos. La comparación de duplicados con \code{normalizar = TRUE} aplica
+estas mismas clases sin borrar ZWJ/ZWNJ ni las etiquetas. El resto del texto
+se cita con sus caracteres, y no con los
 escapes de punto de código de \code{encodeString()}, que dependen del locale: la
 evidencia es la misma bajo \code{C} y bajo un locale UTF-8, y el ejemplo que
 cita casa con el de la tabla de patrones.
@@ -1830,9 +1897,23 @@ cumple también una magnitud entera acotada cuando se cargan filas
 suficientes, y con esa condición sola el veredicto dependería de cuántas
 filas se leyeron; una
 numeración que se repite —un código de catálogo, una clave foránea— no se
-distingue por su forma de esa magnitud y no se trata como numeración. Es la
-misma regla que deciden \code{posible_identificador}, la guarda de los límites de
-Tukey, la de los patrones raros y la de Benford. Por eso un código de
+distingue por su forma de esa magnitud y no se trata como numeración. Esa
+condición de no repetirse es la misma en todas las reglas de numeración del
+perfil, y dentro de la fila la pregunta «¿es una numeración?» tiene una sola
+respuesta: una columna de enteros —guardada como entero, doble, \code{integer64}
+o texto que se lee número— que cubre al menos la mitad del tramo entre su
+mínimo y su máximo con cinco valores distintos o más, casi sin repetirse y
+sin un salto de escala ni una moda que sobresalga, o una secuencia \code{densa}
+con al menos un 90 \% de valores distintos. Esa respuesta publica
+\code{posible_identificador}, apaga los límites de Tukey, hace que
+\code{tipo_declarado_distinto} no proponga convertir la columna a número y que
+\code{patron_raro} no cuente como desvío a los valores que sólo difieren del
+dominante en la cantidad de cifras —los \code{1} a \code{9} de una numeración que
+arranca en 1—; esto último vale también para una secuencia \code{densa} que no
+es numeración, porque un tramo lleno trae todos los largos. Benford la usa
+como una de sus razones para excluir una columna. \code{secuencia_entera_densa}
+mide la cobertura del tramo y no decide sola si la columna es un
+identificador. Por eso un código de
 catálogo que se repite —un \code{EstCod} de 1 a 284— recibe límites de Tukey y,
 con tres órdenes de magnitud, Benford, aunque se lo pase como texto o como
 factor: el paquete infiere número. Para eso está \code{columnas_codigo}.
@@ -2103,16 +2184,34 @@ adelante —\verb{099.123.456}, un teléfono—, un hexadecimal o un \code{5.} q
 y se declaran igual. Un número con moneda o unidad (\verb{USD 1,234.56}, \verb{12 kg})
 no se resume: es un número escrito como texto, y \code{numero_texto_moneda} y
 \code{numero_texto_unidad} publican lo que traía.
-Los prefijos de tres letras separados
-del número, incluso como sufijo, \code{U$S} y los símbolos monetarios se
-conservan como evidencia; \code{monedas_mixtas} informa sus frecuencias sin
-convertir ni suponer tasas de cambio. Una única moneda o un símbolo \code{$}
-aislado no produce ese hallazgo.
+Un código de tres letras mayúsculas separado del número por espacios,
+delante o detrás, es una moneda sólo si es un código ISO 4217 —la lista de
+\code{\link[=validar_iso4217]{validar_iso4217()}}—: \verb{USD 35} es un importe y \verb{LEY 18331} no es un número;
+pegado al número (\verb{35USD}) no es una moneda sino un código. Un símbolo
+monetario —\code{$}, \verb{£}, el del euro— o \code{U$S} es una moneda delante o detrás
+del número, pegado o separado por un espacio, también el duro o el fino que
+deja una planilla: \verb{1.234,56 $}, \verb{$1.234,56} y \code{U$S35} son importes, y
+\verb{$ 10} y \verb{20 $} son la misma moneda. Un valor con moneda delante y detrás
+(\verb{$ 35 $}, \verb{USD 35 EUR}) no es un número. La moneda se conserva como
+evidencia; \code{monedas_mixtas} informa sus frecuencias sin convertir ni suponer tasas de
+cambio. Una única moneda o un símbolo \code{$} aislado no produce ese hallazgo.
 Un sufijo de unidad se reconoce sólo si es \verb{\%} o una abreviatura alfabética
-en minúsculas; por eso \verb{12 kg} y \verb{13500 g} son unidades, mientras que
-\verb{12A} y \verb{13B} se tratan como códigos. Si hay más de una unidad observada,
-\code{unidades_mixtas} informa sus frecuencias y no convierte ni compara sus
-magnitudes. Una única unidad no genera ese hallazgo.
+que termina en minúscula; por eso \verb{12 kg} y \verb{13500 g} son unidades. Un valor
+con un sufijo en mayúsculas que no es un código de moneda (\verb{12A}, \verb{13B},
+\verb{500GB}, \verb{1.5TB}) se trata como un código: no cuenta como número escrito
+como texto, tenga o no separador decimal, y el plan no propone convertirlo.
+Lo mismo un número con tres mayúsculas que no son un código ISO 4217
+(\verb{ABC 13}). Junto a otros números, esos valores no apagan
+\code{numero_como_texto} para la columna: siguen escritos como números, y para
+decidir si la columna guarda números como texto cuentan como tales. No entran
+en \code{n_numeros_texto} ni en \code{proporcion_numeros_texto}, que cuentan lo que la
+conversión lee; la evidencia del hallazgo dice cuántos son, y la conversión
+de la columna queda sin marcar mientras haya alguno. En
+\code{c("1,5", "2,5", "3", "12 KG")} el hallazgo nombra \verb{1,5} y \verb{2,5}, y \verb{12 KG}
+no se convierte.
+Si hay más de una unidad observada, \code{unidades_mixtas} informa sus
+frecuencias y no convierte ni compara sus magnitudes. Una única unidad no
+genera ese hallazgo.
 \code{formatos_fecha_mixtos} compara representaciones dentro de una columna cuyo
 dominio es la fecha o la fecha-hora. Una fecha agregada adentro de una
 columna de horas del día —\verb{12/02/2011 6:55 a.m.} entre valores \verb{7:10 a.m.}—

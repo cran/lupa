@@ -1,6 +1,6 @@
 Package: lupa
-Title: Data Profiling and Quality Measurement
-Version: 0.1.1
+Title: Data Profiling and Quality Measurement for Tables and Databases
+Version: 0.1.2
 Authors@R: 
     c(
       person("Sebastián", "Lucas", , "sebalucas@gmail.com", role = c("aut", "cre", "cph"),
@@ -53,7 +53,7 @@ VignetteBuilder: knitr
 Config/testthat/edition: 3
 Config/roxygen2/version: 8.0.0
 NeedsCompilation: no
-Packaged: 2026-11-12 09:26:37 UTC; user
+Packaged: 2026-11-16 17:48:43 UTC; user
 Author: Sebastián Lucas [aut, cre, cph] (ORCID:
     <https://orcid.org/0009-0009-9068-0276>),
   Robyn Speer [ctb, cph] (byte tables, character categories, regular
@@ -63,4 +63,4 @@ Author: Sebastián Lucas [aut, cre, cph] (ORCID:
     1.1.0 (MIT))
 Maintainer: Sebastián Lucas <sebalucas@gmail.com>
 Repository: CRAN
-Date/Publication: 2026-11-12 15:50:02 UTC
+Date/Publication: 2026-11-17 07:50:23 UTC

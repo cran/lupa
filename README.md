@@ -9,12 +9,14 @@ scope and what it could not measure.
 <!-- badges: start -->
 
 [![R-CMD-check](https://github.com/sebollin/lupa/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/sebollin/lupa/actions/workflows/R-CMD-check.yaml)
+[![Codecov test coverage](https://codecov.io/gh/sebollin/lupa/graph/badge.svg)](https://app.codecov.io/gh/sebollin/lupa)
 [![Engines CI](https://img.shields.io/github/actions/workflow/status/sebollin/lupa/motores.yaml?branch=main&label=engines%20CI)](https://github.com/sebollin/lupa/actions/workflows/motores.yaml)
 [![CRAN status](https://www.r-pkg.org/badges/version/lupa)](https://CRAN.R-project.org/package=lupa)
 [![CRAN downloads](https://cranlogs.r-pkg.org/badges/grand-total/lupa)](https://CRAN.R-project.org/package=lupa)
 [![CRAN downloads per month](https://cranlogs.r-pkg.org/badges/lupa)](https://CRAN.R-project.org/package=lupa)
 [![Dependencies](https://tinyverse.netlify.app/badge/lupa)](https://CRAN.R-project.org/package=lupa)
 [![r-universe](https://sebollin.r-universe.dev/lupa/badges/version)](https://sebollin.r-universe.dev/lupa)
+[![Ask DeepWiki](https://img.shields.io/badge/ask-DeepWiki-0969DA.svg)](https://deepwiki.com/sebollin/lupa)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.24117753-1682D4.svg)](https://doi.org/10.5281/zenodo.24117753)
 [![R \>= 4.2.0](https://img.shields.io/badge/R-%E2%89%A5%204.2.0-276DC3.svg)](https://cran.r-project.org/)
 [![Lifecycle: stable](https://img.shields.io/badge/lifecycle-stable-0D9786.svg)](https://lifecycle.r-lib.org/articles/stages.html#stable)
@@ -56,7 +58,17 @@ Install the released version from CRAN:
 install.packages("lupa")
 ```
 
-or the development version from GitHub:
+the development version, already built, from
+[r-universe](https://sebollin.r-universe.dev/lupa):
+
+``` r
+install.packages(
+  "lupa",
+  repos = c("https://sebollin.r-universe.dev", "https://cloud.r-project.org")
+)
+```
+
+or the same development version from GitHub:
 
 ``` r
 # install.packages("pak")
@@ -404,7 +416,9 @@ date and checksum ([Evidencia y rendimiento](https://sebollin.github.io/lupa/art
 citation("lupa")
 ```
 
-Every release is archived on Zenodo:
+For a CRAN installation the entry carries the package DOI assigned by CRAN,
+[10.32614/CRAN.package.lupa](https://doi.org/10.32614/CRAN.package.lupa).
+Every release is also archived on Zenodo:
 [10.5281/zenodo.24117753](https://doi.org/10.5281/zenodo.24117753) always
 resolves to the latest version, and each version has its own DOI there for
 citing an exact release.

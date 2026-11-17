@@ -26,8 +26,62 @@
 # ordenado: hace falta la clave para pasarsela a `order()`.
 .es_ascii <- function(x) {
   if (!length(x)) return(TRUE)
-  !any(grepl("[^\\001-\\177]", x, useBytes = TRUE, perl = TRUE),
-       na.rm = TRUE)
+  !any(.no_ascii(x), na.rm = TRUE)
+}
+
+# Que elementos traen algun byte fuera de ASCII, mirando los bytes y no los
+# caracteres: no traduce, no depende del locale, y un `NA` da FALSE. Una cadena
+# ASCII no puede llevar marca de codificacion -R no se la pone- ni contener
+# ningun caracter que no sea ASCII, asi que todo paso que solo mira o cambia
+# caracteres no ASCII (declarar UTF-8, plegar acentos, proteger grafemas) la
+# deja igual. Con esta mascara esos pasos recorren solo lo que pueden cambiar:
+# sobre una columna ASCII de 200.000 filas, declarar la codificacion costaba lo
+# mismo que si cada celda la necesitara, y se pedia decenas de veces por perfil.
+#
+# Por lo mismo, una cadena con marca (`UTF-8`, `latin1`, `bytes`) es no ASCII
+# sin mirarla, y los bytes se leen solo en las que no la tienen: despues de la
+# primera declaracion de una columna eso es casi siempre lo ASCII, y una columna
+# no ASCII ya declarada no paga la lectura.
+.no_ascii <- function(x) {
+  if (!is.character(x)) {
+    return(grepl("[^\\001-\\177]", x, useBytes = TRUE, perl = TRUE))
+  }
+  salida <- Encoding(x) != "unknown"
+  sin_marca <- !salida
+  if (any(sin_marca)) {
+    salida[sin_marca] <- grepl(
+      "[^\\001-\\177]", if (all(sin_marca)) x else x[sin_marca],
+      useBytes = TRUE, perl = TRUE
+    )
+  }
+  salida
+}
+
+# Las celdas que tiene que recorrer un paso que solo lee o cambia caracteres no
+# ASCII: la mascara que llega -la de `.no_ascii()` o una que la contiene: una
+# celda de mas solo se recorre de mas-, o la de `.no_ascii()`. Con pocas celdas
+# se recorren todas, como antes: leer los bytes es otra llamada a PCRE, con un
+# costo fijo (unos 47 microsegundos en Windows) que en un vector chico pesa mas
+# que lo que ahorra, y sumaba llamadas de un solo valor donde no las habia.
+.MIN_CELDAS_MASCARA_NO_ASCII <- 64L
+.mascara_no_ascii <- function(textos, no_ascii = NULL) {
+  if (!is.null(no_ascii)) return(no_ascii)
+  if (length(textos) < .MIN_CELDAS_MASCARA_NO_ASCII) {
+    return(rep(TRUE, length(textos)))
+  }
+  .no_ascii(textos)
+}
+
+# Aplica `f` -un paso que solo lee o cambia caracteres no ASCII- a las celdas
+# con algun byte fuera de ASCII, y deja las demas como estan: sobre ellas el paso
+# no hace nada. `no_ascii`: ver `.mascara_no_ascii()`. Si la mascara las incluye
+# todas, `f` recibe el vector entero, como antes, sin copiarlo.
+.en_celdas_no_ascii <- function(textos, f, no_ascii = NULL) {
+  no_ascii <- .mascara_no_ascii(textos, no_ascii)
+  if (!any(no_ascii)) return(textos)
+  if (all(no_ascii)) return(f(textos))
+  textos[no_ascii] <- f(textos[no_ascii])
+  textos
 }
 
 # R representa un byte que no puede mostrar con su octal -`\\377`-, y esa es la
@@ -203,8 +257,14 @@
   #
   # `bytes` queda afuera a proposito: `enc2utf8()` aborta sobre esa marca, y
   # debe hacerlo, porque son bytes que nadie declaro como texto.
+  #
+  # Y se convierte con la lectura de las acciones de texto, no con `enc2utf8()`
+  # a secas: los cinco bytes que Windows-1252 no define salian como el texto
+  # `<81>`, y la celda `latin1` daba una clave distinta de la misma en UTF-8
+  # -`n_distintos` contaba dos valores donde las acciones leen uno- e igual a la
+  # del texto de cuatro letras `<81>`. Ver `.latin1_a_utf8()`.
   declarada <- !is.na(crudo) & Encoding(crudo) == "latin1"
-  if (any(declarada)) crudo[declarada] <- enc2utf8(crudo[declarada])
+  if (any(declarada)) crudo[declarada] <- .latin1_a_utf8(crudo[declarada])
 
   # `bytes` NO es una codificacion mas: es la declaracion explicita de que eso
   # no se interprete como texto. El paquete la respeta al imprimir -lo fija
@@ -475,6 +535,17 @@
   if (is.list(x)) {
     atributos <- attributes(x)
     cuerpo <- lapply(unclass(x), .marcar_para_exhibir, escapar = escapar)
+    # En el reintento se escapan tambien los nombres de lo que va adentro: una
+    # columna-lista puede llevar un `data.frame` -las claves de la traza- cuyo
+    # nombre es el de una columna con bytes que no son UTF-8, y `deparse()`
+    # aborta sobre ese nombre. Solo en el reintento, como el resto del escape:
+    # donde base puede, su salida no cambia.
+    if (escapar && !is.null(atributos$names)) {
+      atributos$names <- .marcar_para_exhibir(atributos$names, escapar)
+    }
+    if (escapar && is.character(atributos$row.names)) {
+      atributos$row.names <- .marcar_para_exhibir(atributos$row.names, escapar)
+    }
     if (!is.null(atributos)) attributes(cuerpo) <- atributos
     return(cuerpo)
   }
@@ -1789,6 +1860,13 @@ match <- function(x, table, nomatch = NA_integer_, incomparables = NULL) {
       estructura$resumen_tabla$columnas
     )
   }
+  # La muestra es un perfil de `perfilar()`, y sus tablas se imprimen igual que
+  # las de ese perfil aunque las guardas de salida las hayan rehecho.
+  if (is.list(estructura) && is.list(estructura$perfil_muestra)) {
+    estructura$perfil_muestra <- .publicar_tablas_perfil(
+      estructura$perfil_muestra
+    )
+  }
   class(estructura) <- "perfil_dbi"
   estructura
 }
@@ -2303,10 +2381,15 @@ match <- function(x, table, nomatch = NA_integer_, incomparables = NULL) {
 # leerla. La primera regla compara el decimal con la fraccion exacta del doble;
 # la segunda conserva los literales cortos cuya lectura de R coincide. El
 # resultado es la posicion del centinela declarado, o NA si no coincide.
+#
+# `recortado` lo pasa quien ya recorto el texto, como en
+# `.normalizar_numeros_texto()`: sin centinelas declarados la funcion devuelve
+# enseguida, y el recorte era todo su costo.
 .identidades_sentinelas_texto <- function(texto, sentinelas_numericos,
                                           convencion = NULL,
-                                          valores_leidos = NULL) {
-  texto <- trimws(as.character(texto))
+                                          valores_leidos = NULL,
+                                          recortado = FALSE) {
+  if (!recortado) texto <- trimws(as.character(texto))
   salida <- rep(NA_integer_, length(texto))
   if (!length(texto) || !length(sentinelas_numericos)) return(salida)
   if (is.null(valores_leidos)) {
@@ -2325,7 +2408,7 @@ match <- function(x, table, nomatch = NA_integer_, incomparables = NULL) {
   }
   indices <- which(candidatos)
   if (!length(indices)) return(salida)
-  normalizados <- .normalizar_numeros_texto(texto, convencion)
+  normalizados <- .normalizar_numeros_texto(texto, convencion, recortado = TRUE)
   piezas_texto <- lapply(normalizados[indices], .piezas_decimal_texto)
   piezas_sentinelas <- lapply(sentinelas_numericos, .piezas_decimal_doble)
   for (j in seq_along(sentinelas_numericos)) {
@@ -2654,6 +2737,9 @@ match <- function(x, table, nomatch = NA_integer_, incomparables = NULL) {
 # tabla: los demas diagnosticos ven el factor como llego.
 .normalizar_columna_igualdad <- function(x) {
   x <- .normalizar_columna_entrada(x)
+  # El texto, con la lectura de las acciones: una columna `latin1` y su gemela
+  # UTF-8 son la misma columna. Ver `.leer_latin1_sin_windows_1252()`.
+  x <- .leer_latin1_sin_windows_1252(x)
   if (is.factor(x) && !is.ordered(x)) x <- .factor_niveles_por_bytes(x)
   x
 }

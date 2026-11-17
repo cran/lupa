@@ -56,6 +56,16 @@
 #' la coma decimal): es como lo lee el resumen de [perfilar()]. Sin evidencia de
 #' convención no cuenta, y un primer grupo de miles que empieza con cero
 #' (`099.123.456`, la forma de un teléfono) no es un número en ninguna.
+#' Un separador decimal que abre el número (`.5`, `,5`) se lee igual que `0.5`
+#' o `0,5` y aporta la misma evidencia de convención; mezclado con la
+#' convención contraria, la columna queda `mixta`. La notación científica
+#' (`1e5`, `1.2E-05`, `1,5e3`) es un número, y no la forma de un identificador,
+#' cualquiera sea el signo del exponente; un exponente que desborda el doble
+#' (`1e400`) no lo es. Si la proporción de números alcanza el umbral y alguno
+#' trae decimales, el tipo inferido es `doble` aunque la mayoría sean enteros:
+#' es el tipo que los cubre a todos. Un número con unidad o moneda (`12 kg`,
+#' `USD 35`) no cuenta como entero ni como doble: [perfilar()] lo informa como
+#' número escrito como texto.
 #'
 #' @param x Vector que se desea examinar. Una tabla —también la de una columna
 #'   que da `tibble[, "f"]`— se rechaza: se pasa la columna, `tabla[["f"]]`.
@@ -80,7 +90,8 @@ inferir_tipo <- function(x, umbral = 0.8, muestra = 1e5) {
 }
 
 .inferir_tipo_interno <- function(x, umbral = 0.8, muestra = 1e5,
-                                  conservar_cache = TRUE) {
+                                  conservar_cache = TRUE,
+                                  convencion_numero_texto = NULL) {
   if (length(umbral) != 1L || is.na(umbral) || umbral < 0 || umbral > 1) {
     .detener("`umbral` debe estar entre 0 y 1.", call. = FALSE)
   }
@@ -148,62 +159,29 @@ inferir_tipo <- function(x, umbral = 0.8, muestra = 1e5) {
     rep(FALSE, length(formas))
   }
   enteros <- grepl("^[+-]?[0-9]+$", formas, perl = TRUE)
-  dobles <- grepl(
-    "^[+-]?(?:[0-9]+(?:[.,][0-9]+)?|[.,][0-9]+)(?:[eE][+-]?[0-9]+)?$",
-    formas, perl = TRUE
-  )
-  # Un separador seguido por exactamente tres digitos -`1.500`, `1,500`- es un
-  # numero solo si la columna decide la convencion: puede ser mil quinientos o
-  # uno y medio, y elegir seria inventar. La evidencia es la MISMA que publica
-  # `numero_texto_convencion` -`.componentes_numero_texto()`- y vale para los
-  # dos separadores por igual. Antes la guarda existia solo para el punto, y la
-  # decidia CUALQUIER coma de la columna: un `2,000` -tan ambiguo como el
-  # `1.500`- bastaba, y `1,500` no tenia guarda. La columna de miles con coma
-  # salia `doble` con su resumen leido como decimales, mientras la gemela con
-  # punto salia `texto`, sin resumen. Con evidencia de una sola convencion esas
-  # formas si son numeros, y el resumen las lee con ella.
-  separador_ambiguo <- dobles &
-    grepl("^[+-]?[0-9]{1,3}[.,][0-9]{3}$", formas, perl = TRUE)
-  # Un numero con los miles agrupados -`1.234,56`, `1,234.56`, `1.234.567`- no
-  # casa con `dobles`, que admite un solo separador. Es la escritura corriente
-  # de un importe en Uruguay, y una columna entera de ellos salia `texto`, sin
-  # resumen, al lado de `numero_texto_seguro = TRUE` y de la convencion que la
-  # misma fila publicaba.
-  #
-  # Cuenta como numero lo que el resumen lee, y con la misma funcion:
-  # `.leer_numeros_texto()` con la convencion de la misma evidencia que publica
-  # `numero_texto_convencion`. Para los agrupados y para los de un separador
-  # seguido de tres digitos, que son los que la convencion decide. Una regla
-  # aparte se desincronizo: la inferencia contaba `099.123.456` junto a un
-  # `1.234,56` -un telefono, que el resumen publicaba como maximo 99123456-, y
-  # con la convencion mixta no contaba el `1.234,56` que el resumen si leia.
-  # Ahora un grupo de miles que empieza con cero no se lee en ninguna
-  # convencion; sin evidencia -una columna de `1.234.567`- no hay lectura; y con
-  # las dos, cada valor se lee con la suya, como lo lee el resumen.
-  agrupado <- !dobles & (
-    grepl(.patron_miles_coma, formas, perl = TRUE) |
-      grepl(.patron_miles_punto, formas, perl = TRUE)
-  )
-  revisar <- separador_ambiguo | agrupado
-  if (any(revisar)) {
+  # Es doble lo que el lector comun lee -`.leer_numeros_texto()`, el mismo
+  # del resumen y de la conversion de tipo-, con la convencion decimal de la
+  # columna: la que el perfil publica en `numero_texto_convencion` cuando
+  # llama `perfilar()`, o la de los valores analizados. La inferencia contaba
+  # con una expresion propia y se desincronizo del resumen: `.5` junto a
+  # `1.234,56` daba compatibilidad 1 con cuatro de nueve valores fuera del
+  # resumen, y `3.5e2` en una columna de coma decimal se contaba sin leerse.
+  # Lo que el lector no lee no cuenta: un separador seguido de tres digitos
+  # sin evidencia de convencion (`1.500`), un grupo de miles que empieza con
+  # cero (`099.123.456`) o un exponente que desborda el doble (`1e400`).
+  # La convencion solo decide la lectura de una forma de numero que trae
+  # separador: si no hay ninguna, no se calcula.
+  if (is.null(convencion_numero_texto)) {
     con_separador <- grepl("[.,]", formas, perl = TRUE)
-    partes_numero <- .componentes_numero_texto(formas[con_separador])
-    evidencia_coma <- any(partes_numero$evidencia_coma)
-    evidencia_punto <- any(partes_numero$evidencia_punto)
-    # Los nombres que `.interpretar_numeros_texto()` publica con esa evidencia.
-    convencion <- if (evidencia_coma && evidencia_punto) {
-      "mixta"
-    } else if (evidencia_coma) {
-      "decimal_coma"
-    } else if (evidencia_punto) {
-      "decimal_punto"
-    } else {
-      "ambigua"
-    }
-    dobles[revisar] <- !is.na(
-      .leer_numeros_texto(formas[revisar], convencion)
-    )
+    convencion_numero_texto <- if (
+      any(con_separador) && any(.formas_numero_texto(formas[con_separador]))
+    ) {
+      .analizar_numeros_texto(valores)$convencion
+    } else ""
   }
+  dobles <- is.finite(suppressWarnings(
+    .leer_numeros_texto(formas, convencion_numero_texto)
+  ))
   horas <- grepl(
     "^(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9])?$",
     formas, perl = TRUE
@@ -228,7 +206,8 @@ inferir_tipo <- function(x, umbral = 0.8, muestra = 1e5) {
   forma_id <- grepl("^[[:alnum:]_.:/-]+$", formas, perl = TRUE)
   tiene_cero_inicial <- grepl("^0[0-9]+$", formas, perl = TRUE)
   tiene_letras_numeros <- grepl("[[:alpha:]]", formas, perl = TRUE) &
-    grepl("[[:digit:]]", formas, perl = TRUE)
+    grepl("[[:digit:]]", formas, perl = TRUE) &
+    !.forma_cientifica_numero_texto(formas)
   estructura_id <- forma_id & (tiene_cero_inicial | tiene_letras_numeros)
   n_id <- sum(estructura_id * pesos)
 
@@ -259,6 +238,12 @@ inferir_tipo <- function(x, umbral = 0.8, muestra = 1e5) {
     tipo <- "hora"
   } else if (es_id) {
     tipo <- "identificador"
+  } else if (cumple("doble") && any(dobles & !enteros)) {
+    # Con un decimal entre enteros el tipo es `doble`, que es el que cubre a
+    # todos. Por ser enteros el 80 % salia `entero` con compatibilidad 0,8 y el
+    # hallazgo anunciaba "convertir dejaria 1 de 5 valores en NA" sobre una
+    # columna que el resumen leia entera y el plan convertia sin ningun `NA`.
+    tipo <- "doble"
   } else if (cumple("entero")) {
     tipo <- "entero"
   } else if (cumple("doble")) {
@@ -272,7 +257,12 @@ inferir_tipo <- function(x, umbral = 0.8, muestra = 1e5) {
   } else {
     conteos[[tipo]]
   }
-  if (!conservar_cache) attr(formatos, "meses_texto") <- NULL
+  if (!conservar_cache) {
+    # Los dos intermedios de la deteccion: ninguno es parte de lo que
+    # `inferir_tipo()` publica.
+    attr(formatos, "meses_texto") <- NULL
+    attr(formatos, "asignacion") <- NULL
+  }
   .inferencia(tipo, compatibles, n, muestreo, candidatos, formatos)
 }
 
@@ -304,12 +294,15 @@ print.inferencia_tipo <- function(x, ...) {
 #   sin que ninguno choque no pierde nada, y el plan la deja `lista`.
 #
 # `meses_texto`, los meses escritos que la inferencia ya leyo, para no volver a
-# detectarlos.
+# detectarlos. `numeros_texto`, el analisis de los numeros escritos como texto
+# de la columna, con el que el perfil decidio `numero_como_texto`: ver
+# `.fila_con_numeros_como_texto()`.
 #
 # Devuelve las frases para la evidencia, vacio si no hay ninguna, y `NULL` si no
 # puede saberlo -sin la columna-: entonces la evidencia no afirma nada.
 .riesgos_conversion_tipo <- function(x, fila, formatos = NULL,
-                                     meses_texto = NULL) {
+                                     meses_texto = NULL,
+                                     numeros_texto = NULL) {
   tipo <- as.character(fila$tipo_inferido[[1L]])
   numero <- tipo %in% c("entero", "doble", "integer64")
   fecha <- tipo %in% c("fecha", "fecha-hora")
@@ -317,8 +310,29 @@ print.inferencia_tipo <- function(x, ...) {
   if (is.null(x) || !(is.character(x) || is.factor(x))) return(NULL)
   riesgos <- character()
   antes <- .texto_representacion_conversion(x)
+  # Los lectores reciben el texto que midio el perfil -el que deja
+  # `.texto_analizable()`-, no la columna cruda, como en
+  # `.indices_hallazgo_columna()`. Una celda sin marca con un byte que no es
+  # UTF-8 valido -un CSV en latin-1 leido sin declarar la codificacion- hacia
+  # abortar `trimws()` dentro del lector, y con el `perfilar()` entero, en una
+  # sesion UTF-8; bajo `C` se leia. Esa celda ya esta fuera del analisis textual
+  # y contada en `n_codificacion_invalida`: no es un numero ni una fecha. `antes`
+  # sigue siendo lo almacenado, porque los ceros y las escrituras que chocan se
+  # cuentan como los cuenta el plan, `.evaluar_conversion()`.
+  texto <- .texto_analizable(x)$valores
   plural <- function(n, uno, varios) {
     paste0(.miles_trabajo(n), if (n == 1L) uno else varios)
+  }
+  # Un valor presente que el analisis dejo fuera por no ser UTF-8 valido no lo
+  # lee ninguna conversion: el plan la bloquea -"1 de 8 valores presentes no se
+  # lee"- y la evidencia decia que no se perdia ningun valor.
+  ilegibles <- !is.na(antes) & is.na(texto)
+  if (any(ilegibles)) {
+    riesgos <- c(riesgos, plural(
+      sum(ilegibles),
+      " valor no es texto UTF-8 v\u00e1lido y la conversi\u00f3n no lo lee",
+      " valores no son texto UTF-8 v\u00e1lido y la conversi\u00f3n no los lee"
+    ))
   }
   if (numero) {
     ceros <- !is.na(antes) &
@@ -335,15 +349,33 @@ print.inferencia_tipo <- function(x, ...) {
     if (length(convencion) != 1L || is.na(convencion)) convencion <- ""
     indecisa <- convencion %in% c("ambigua", "mixta")
     leidos <- suppressWarnings(.leer_numeros_texto(
-      x, if (nzchar(convencion)) convencion else NULL
+      texto, if (nzchar(convencion)) convencion else NULL
     ))
+    # Un entero fuera del rango de `integer` es compatible con el tipo y la
+    # conversion del plan no lo representa: queda bloqueada, con los mismos
+    # limites que `.convertir_tipo()`. La frase decia "no pierde ningun valor".
+    if (identical(tipo, "entero")) {
+      fuera_rango <- !is.na(leidos) & is.finite(leidos) &
+        (leidos < -.Machine$integer.max | leidos > .Machine$integer.max)
+      if (any(fuera_rango)) {
+        riesgos <- c(
+          riesgos,
+          paste0(
+            plural(
+              sum(fuera_rango),
+              " valor no entra en un entero",
+              " valores no entran en un entero"
+            ),
+            "; la conversi\u00f3n a entero no se recomienda"
+          )
+        )
+      }
+    }
     # La precision con la regla del plan, sobre los numeros que el resumen lee:
     # esta frase miraba solo `omitidos_precision`, que el resumen declara para
     # los enteros mayores que 2^53, y dejaba afuera los decimales de 18 cifras
     # que el plan si marca destructivos. Ver `.cifras_que_redondea_un_doble()`.
-    redondeados <- .cifras_que_redondea_un_doble(
-      trimws(as.character(x)), leidos
-    )
+    redondeados <- .cifras_que_redondea_un_doble(trimws(texto), leidos)
     if (any(redondeados)) {
       doble <- " de las que guarda un n\u00famero de doble precisi\u00f3n"
       riesgos <- c(riesgos, plural(
@@ -363,6 +395,23 @@ print.inferencia_tipo <- function(x, ...) {
         "la convenci\u00f3n decimal no est\u00e1 decidida (", convencion, ")"
       ))
     }
+    # Con `numero_como_texto` el plan convierte por la via regional, que lee
+    # menos que la inferencia: la notacion cientifica es un numero para el
+    # lector comun -por eso la compatibilidad puede ser 1- y no responde al
+    # formato regional. El perfil ya lo midio: son los valores que le faltan a
+    # `proporcion_numeros_texto` para llegar a 1, y con uno solo la conversion
+    # regional no se ejecuta. La frase decia "no pierde ningun valor" al lado
+    # de esa accion bloqueada. Un numero con un sufijo o un codigo que no se
+    # convierte (`12 KG`) tampoco esta en esa proporcion: la conversion regional
+    # no lo lee.
+    if (.fila_con_numeros_como_texto(fila, numeros_texto) &&
+        isTRUE(fila[["proporcion_numeros_texto"]] < 1)) {
+      riesgos <- c(riesgos, paste0(
+        "hay valores presentes que no responden al formato num\u00e9rico ",
+        "regional -la notaci\u00f3n cient\u00edfica, por ejemplo- y la ",
+        "conversi\u00f3n regional no los lee"
+      ))
+    }
     # Con la convencion sin decidir el plan ya bloquea: no se cuentan choques.
     despues <- if (indecisa) NULL else leidos
   } else {
@@ -374,7 +423,8 @@ print.inferencia_tipo <- function(x, ...) {
       riesgos <- c(riesgos, "hay valores con m\u00e1s de una lectura de fecha")
     }
     despues <- tryCatch(
-      as.numeric(.parsear_fechas(x, formatos, meses_texto = meses_texto)),
+      as.numeric(.parsear_fechas(x, formatos, meses_texto = meses_texto,
+                                 valores_preparados = texto)),
       error = function(e) NULL
     )
     # `fecha` se guarda como `Date`: dos instantes del mismo dia son el mismo.

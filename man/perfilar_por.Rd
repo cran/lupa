@@ -131,15 +131,27 @@ bastantes filas en un grupo y muy pocas en otro. Sin esa tabla, un grupo sin
 hallazgos se lee como un grupo sano, cuando puede ser un grupo sobre el que
 no se miró.
 
-Las senales de numeracion densa y de identificacion se miden tambien sobre
-columnas \code{integer64} con comparaciones exactas. Si un grupo vuelve a
-conjeturar un centinela por la particion, el hallazgo se mueve a esta
-cobertura y no se publica como defecto del grupo. "La columna entera" es la
-que \code{\link[=perfilar]{perfilar()}} mide con la misma declaración: las filas que
+Las señales de numeración densa y de identificación, y el centinela que la
+columna conjetura, se miden una sola vez sobre la columna entera con el
+mismo código que \code{\link[=perfilar]{perfilar()}}: en columnas numéricas, en \code{integer64} con
+comparaciones exactas, y en texto y \code{factor} que se leen como números. Si
+un grupo vuelve a conjeturar un centinela por la partición, el hallazgo se
+mueve a esta cobertura y no se publica como defecto del grupo. "La columna
+entera" es la que \code{\link[=perfilar]{perfilar()}} mide con la misma declaración: las filas que
 \code{aplicabilidad} deja fuera no cuentan para el centinela, la numeración ni
 la guarda de Benford. Y lo que la columna entera sí conjetura —una
 numeración cuya moda sobresale, o un candidato fuera de su rango— no es
 de la partición: el grupo lo publica.
+
+Sobre una numeración densa, cada grupo cuenta los faltantes disfrazados
+con la guarda de la columna entera, como \code{\link[=perfilar]{perfilar()}} sobre la tabla
+completa: un \code{999} dentro de \code{1:2000} es un código de la numeración y no
+se cuenta ni en \code{faltantes_disfrazados} ni en \code{faltantes}, aunque dentro
+del grupo la numeración tenga huecos. Lo que así se deja de contar se
+declara en esta cobertura, con el diagnóstico \code{centinelas_numericos}, y el
+motivo dice si contado habría hecho cruzar el umbral de \code{faltantes}. Las
+ausencias escritas con texto —un \code{"0"} declarado en \code{cadenas_ausencia},
+por ejemplo— son del grupo y se siguen contando.
 }
 \description{
 Aplica \code{\link[=perfilar]{perfilar()}} a cada grupo de filas por separado y devuelve los

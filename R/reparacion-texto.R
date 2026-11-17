@@ -44,6 +44,18 @@ names(.ftfy_tablas_bytes) <- c(
   "sloppy-windows-1257", "iso-8859-2", "macroman", "cp437", "koi8-r"
 )
 
+# Una continuacion UTF-8 mal leida puede conservarse como C1/Latin-1 o como
+# el punto Unicode que Windows-1252 asigna al mismo byte. La tabla congelada ya
+# contiene esa correspondencia: derivar el conjunto evita omitir un miembro al
+# ampliar la lista de bytes que el reparador acepta.
+.ftfy_representaciones_continuacion <- {
+  bytes <- 0x80L:0xBFL
+  unique(c(
+    bytes,
+    .ftfy_tablas_bytes[["sloppy-windows-1252"]][seq_along(bytes)]
+  ))
+}
+
 .ftfy_categorias <- list(
   common = "\u00a0\u00ad\u00b7\u00b4\u2013\u2014\u2015\u2026\u2019",
   c1 = "\u0080-\u009f",
@@ -149,12 +161,59 @@ names(.ftfy_tablas_bytes) <- c(
          .ftfy_re_cat("box")),
   paste0("\u00e2", .ftfy_re_cat("common"),
          .ftfy_re_cat("start_punctuation", "end_punctuation", "currency",
-                      "numeric", "common"))
+                      "numeric", "common")),
+  # La u y la i con breve (C5 AD y C4 AD, el esperanto "anka\u016d") leidas
+  # como latin-1 son una A mayuscula con anillo o con dieresis seguida de un
+  # guion blando, y ninguna regla las reconocia: el plan borraba el guion como
+  # un invisible mas y la letra quedaba rota sin hallazgo. Se las reconoce solo
+  # detras de una minuscula, donde la letra que sale, tambien minuscula, sigue
+  # la palabra. Detras de una mayuscula el mismo par es una palabra en
+  # mayusculas cortada por un guion blando legitimo ("P\u00c5" + guion +
+  # "SKE"), y por eso "E" + par + "ropo" sigue sin reconocerse. La letra de dos
+  # bytes con espacio duro como segundo byte (la S con caron, C5 A0) no tiene un
+  # contexto asi: "\u00c5" + espacio duro + una palabra es tambien texto
+  # noruego o sueco bien escrito.
+  "[\u00c4\u00c5](?<=\\p{Ll}.)\u00ad"
+)
+# Lo que la expresion de ftfy toma por mojibake y es texto bien escrito. Una
+# posicion donde empieza alguno de estos tramos no cuenta como evidencia,
+# aunque alguna regla empiece ahi:
+#   - una A mayuscula con tilde seguida de un caracter de A0 a BF que, leido
+#     como segundo byte, daria una minuscula ("IRM\u00c3" + espacio duro +
+#     "DE" saldria "IRM\u00e0DE"), detras de dos mayusculas y sin una
+#     minuscula despues, o detras de una mayuscula y antes de otra. El
+#     mojibake de esas minusculas va pegado a minusculas ("XIX\u00c3\u00a8me")
+#     o detras de una sola mayuscula ("D\u00c3\u00a9fense"). Si lo que sigue
+#     a la A es un espacio duro, detras de dos mayusculas no cuenta aunque
+#     despues venga una minuscula: separa la palabra en mayusculas de la
+#     siguiente ("IRM\u00c3" + espacio duro + "da Silva").
+#   - el ordinal femenino o masculino detras de un caracter ASCII ("3\u00ba"
+#     antes de una comilla): como segundo byte necesitaria un byte inicial
+#     delante, y un caracter ASCII no lo es.
+# Valen tambien para la regla base de las pasadas siguientes: despues de una
+# reparacion por subcadenas, "MA\u00c3\u0087\u00c3\u0083" + espacio duro ya
+# era "MA\u00c7\u00c3" + espacio duro, y la pasada siguiente lo llevaba a
+# "MA\u00c7\u00e0".
+.ftfy_badness_exclusiones <- c(
+  paste0(
+    "\u00c3(?:(?<=\\p{Lu}\\p{Lu}\u00c3)(?:\u00a0|[\u00a0-\u00b6\u00b8-\u00bf](?!\\p{Ll}))",
+    "|(?<=\\p{Lu}\u00c3)[\u00a0-\u00b6\u00b8-\u00bf](?=\\p{Lu}))"
+  ),
+  "[\u00aa\u00ba](?<=[\\x00-\\x7f].)"
+)
+# La regla base (la de ftfy, que usan las pasadas siguientes) y la completa
+# (con las extensiones) comparten el mismo prefijo de exclusiones.
+.ftfy_badness_prefijo <- paste0(
+  "(*UTF)(*UCP)(?!", paste(.ftfy_badness_exclusiones, collapse = "|"), ")"
+)
+.ftfy_badness_cuerpo_ftfy <- substring(
+  .ftfy_badness_re_ftfy, nchar("(*UTF)(*UCP)") + 1L
+)
+.ftfy_badness_re_base <- paste0(
+  .ftfy_badness_prefijo, "(?:", .ftfy_badness_cuerpo_ftfy, ")"
 )
 .ftfy_badness_re <- paste0(
-  "(*UTF)(*UCP)(?:", substring(
-    .ftfy_badness_re_ftfy, nchar("(*UTF)(*UCP)") + 1L
-  ), "|",
+  .ftfy_badness_prefijo, "(?:", .ftfy_badness_cuerpo_ftfy, "|",
   paste(.ftfy_badness_extensiones, collapse = "|"), ")"
 )
 .ftfy_utf8_detector_re <-
@@ -165,7 +224,7 @@ names(.ftfy_tablas_bytes) <- c(
   # no ASCII. Evitar la expresi\u00f3n completa en texto ASCII mantiene barato el
   # perfilado de columnas grandes sin cambiar el predicado.
   if (!grepl("[^\\x00-\\x7f]", x, perl = TRUE)) return(FALSE)
-  patron <- if (isTRUE(usar_extensiones)) .ftfy_badness_re else .ftfy_badness_re_ftfy
+  patron <- if (isTRUE(usar_extensiones)) .ftfy_badness_re else .ftfy_badness_re_base
   grepl(patron, x, perl = TRUE)
 }
 .ftfy_mascara_mojibake <- function(x, usar_extensiones = TRUE) {
@@ -178,7 +237,7 @@ names(.ftfy_tablas_bytes) <- c(
   )
   if (!any(no_ascii)) return(salida)
   indices <- indices[no_ascii]
-  patron <- if (isTRUE(usar_extensiones)) .ftfy_badness_re else .ftfy_badness_re_ftfy
+  patron <- if (isTRUE(usar_extensiones)) .ftfy_badness_re else .ftfy_badness_re_base
   salida[indices] <- grepl(patron, x[indices], perl = TRUE)
   salida
 }
@@ -254,7 +313,7 @@ names(.ftfy_tablas_bytes) <- c(
   texto <- tryCatch(intToUtf8(entrada), error = function(e) NULL)
   if (is.null(texto) || !validUTF8(texto)) return(rep(FALSE, n))
   patron <- if (isTRUE(usar_extensiones)) .ftfy_badness_re else
-    .ftfy_badness_re_ftfy
+    .ftfy_badness_re_base
   posiciones <- gregexpr(patron, texto, perl = TRUE)[[1L]]
   if (!length(posiciones) || identical(posiciones[[1L]], -1L)) {
     return(rep(FALSE, n))
@@ -305,7 +364,8 @@ names(.ftfy_tablas_bytes) <- c(
     }
     for (desplazamiento in seq_len(longitud)) {
       posicion <- inicio + desplazamiento
-      if (posicion > n || !entrada[[posicion]] %in% 0x80L:0xBFL) break
+      if (posicion > n ||
+          !entrada[[posicion]] %in% .ftfy_representaciones_continuacion) break
       salida[[posicion]] <- TRUE
     }
   }
@@ -383,7 +443,10 @@ names(.ftfy_tablas_bytes) <- c(
                                         max_iteraciones = 20L) {
   entrada <- .codigos_decodificables(texto)
   if (is.null(entrada)) return(logical())
-  if (!any(entrada %in% 0x80L:0xBFL) &&
+  # El atajo mira las mismas representaciones que la mascara de respaldo. El
+  # perfil y `aplicar()` piden la mascara por aqui: con un conjunto para cada
+  # uno, el perfil contaba celdas que la accion despues dejaba como estaban.
+  if (!any(entrada %in% .ftfy_representaciones_continuacion) &&
       (is.null(consumidas) || !any(consumidas))) {
     return(rep(FALSE, length(entrada)))
   }
@@ -878,8 +941,8 @@ names(.ftfy_tablas_bytes) <- c(
   }
   as.raw(salida)
 }
-.ftfy_un_paso <- function(texto) {
-  for (nombre in names(.ftfy_tablas_bytes)) {
+.ftfy_un_paso_tablas <- function(texto, tablas = names(.ftfy_tablas_bytes)) {
+  for (nombre in tablas) {
     es_sloppy <- startsWith(nombre, "sloppy-")
     bytes <- .ftfy_codificar(
       texto, .ftfy_tablas_bytes[[nombre]], permitir_perdida = es_sloppy
@@ -926,6 +989,90 @@ names(.ftfy_tablas_bytes) <- c(
     }
   }
   NULL
+}
+# Un espacio duro o un guion blando que no continua ninguna secuencia UTF-8 -al
+# principio de la celda, despues de un caracter ASCII o de una secuencia ya
+# completa- se agrego despues de la mala conversion, como el `&nbsp;` de una
+# pagina web. Bastaba uno para que la celda entera no se pudiera decodificar, y
+# el motor caia en la reparacion por subcadenas, que solo toca lo que el
+# detector reconoce por si solo: un espacio duro delante de
+# "\u00c5\u017eanl\u00c4\u00b1urfa" reparaba la segunda letra y dejaba la
+# primera, cuando con un espacio comun delante la palabra salia entera. Esos
+# caracteres se apartan -un control ASCII que la celda no contiene ocupa su
+# lugar-, se decodifica la celda y se los devuelve donde estaban. Solo si
+# ninguna tabla decodifica la celda tal como esta (lo que ya se reparaba entero
+# sigue el mismo camino), y solo mientras las pasadas anteriores decodificaron
+# la celda entera: despues de una reparacion por subcadenas la celda mezcla
+# letras ya reparadas, y decodificarla entera volveria a leerlas como bytes
+# ("PER\u00da" + espacio duro saldria con una letra arabe). Un control C1
+# suelto no se aparta: la bateria de ftfy deja sin reparar la letra rota que lo
+# tiene pegado delante ("A" + U+0081 + "\u00c3\u00b1o"), y el motor la sigue.
+.ftfy_invisibles_sueltos <- c(0xa0L, 0xadL)
+.ftfy_posiciones_sueltas <- function(cps) {
+  # Cada punto se lee como el byte que la mala conversion dejo: el mismo hasta
+  # U+00FF (latin-1) y el de Windows-1252 para sus signos, como en
+  # `.ftfy_representaciones_continuacion`.
+  tabla <- .ftfy_tablas_bytes[["sloppy-windows-1252"]]
+  bytes <- ifelse(cps < 0x100L, cps, match(cps, tabla) + 127L)
+  n <- length(bytes)
+  sueltas <- logical(n)
+  i <- 1L
+  while (i <= n) {
+    b <- bytes[[i]]
+    if (is.na(b) || b < 0x80L) {
+      i <- i + 1L
+      next
+    }
+    largo <- if (b >= 0xc2L && b <= 0xdfL) {
+      2L
+    } else if (b >= 0xe0L && b <= 0xefL) {
+      3L
+    } else if (b >= 0xf0L && b <= 0xf4L) {
+      4L
+    } else {
+      0L
+    }
+    if (largo && i + largo - 1L <= n) {
+      siguientes <- bytes[(i + 1L):(i + largo - 1L)]
+      if (!anyNA(siguientes) && all(siguientes >= 0x80L & siguientes <= 0xbfL)) {
+        i <- i + largo
+        next
+      }
+    }
+    if (!largo && cps[[i]] %in% .ftfy_invisibles_sueltos) sueltas[[i]] <- TRUE
+    i <- i + 1L
+  }
+  sueltas
+}
+.ftfy_un_paso <- function(texto, apartar_sueltos = TRUE) {
+  paso <- .ftfy_un_paso_tablas(texto)
+  if (!is.null(paso) || !isTRUE(apartar_sueltos)) return(paso)
+  cps <- utf8ToInt(texto)
+  if (anyNA(cps) || any(cps == 1L) ||
+      !any(cps %in% .ftfy_invisibles_sueltos)) {
+    return(NULL)
+  }
+  sueltas <- .ftfy_posiciones_sueltas(cps)
+  if (!any(sueltas)) return(NULL)
+  # Solo las tablas donde cada caracter apartado es su propio byte: es el byte
+  # que `.ftfy_posiciones_sueltas()` supuso al decidir que no continua nada. En
+  # cp437 o en macroman el mismo caracter es otro byte, y ahi la celda sigue
+  # sin poder decodificarse, como en ftfy.
+  apartados <- unique(cps[sueltas])
+  tablas <- names(.ftfy_tablas_bytes)[vapply(.ftfy_tablas_bytes, function(tabla) {
+    all(tabla[apartados - 127L] == apartados)
+  }, logical(1L))]
+  if (!length(tablas)) return(NULL)
+  apartado <- cps
+  apartado[sueltas] <- 1L
+  paso <- .ftfy_un_paso_tablas(intToUtf8(apartado), tablas = tablas)
+  if (is.null(paso)) return(NULL)
+  salida <- utf8ToInt(paso$texto)
+  lugares <- which(salida == 1L)
+  if (length(lugares) != sum(sueltas)) return(NULL)
+  salida[lugares] <- cps[sueltas]
+  paso$texto <- intToUtf8(salida)
+  paso
 }
 .ftfy_fallback_latin1_windows1252 <- function(texto) {
   cps <- utf8ToInt(texto)
@@ -981,10 +1128,15 @@ names(.ftfy_tablas_bytes) <- c(
                 consumidas = consumidas))
   }
   tope <- max(1L, as.integer(max_iteraciones[[1L]]))
+  # Mientras todo lo hecho fue decodificar la celda entera, se pueden apartar
+  # los invisibles sueltos (`.ftfy_un_paso()`); despues de cualquier otro paso,
+  # no.
+  entera <- TRUE
   for (i in seq_len(min(tope, 20L))) {
     if (!.ftfy_es_mojibake(actual, usar_extensiones)) break
-    paso <- .ftfy_un_paso(actual)
+    paso <- .ftfy_un_paso(actual, apartar_sueltos = entera)
     if (is.null(paso)) {
+      entera <- FALSE
       inconsistente <- .ftfy_decode_inconsistent_utf8(actual, usar_extensiones)
       if (!identical(inconsistente, actual)) {
         actual <- inconsistente
@@ -1049,6 +1201,53 @@ names(.ftfy_tablas_bytes) <- c(
   if (any(estados == "reparado")) return("reparado")
   "no_se_pudo"
 }
+.ftfy_mascaras_codificacion <- function(valores, reparados, estados) {
+  reparables <- !is.na(reparados) & !is.na(valores) & reparados != valores &
+    estados == "reparado"
+  parciales <- !is.na(reparados) & !is.na(valores) & reparados != valores &
+    estados == "reparado_parcialmente"
+  irreparables <- !is.na(valores) & grepl("\uFFFD", valores, fixed = TRUE)
+  no_se_pudo <- !is.na(valores) & !is.na(estados) & estados == "no_se_pudo"
+  list(
+    reparables = reparables,
+    parciales = parciales,
+    irreparables = irreparables,
+    no_se_pudo = no_se_pudo,
+    afectados = reparables | parciales | irreparables | no_se_pudo
+  )
+}
+.ftfy_evidencia_codificacion <- function(valores, reparados, estados,
+                                         afectados, irreparables = NULL) {
+  indices <- which(afectados & !is.na(valores))
+  if (!length(indices)) return("")
+  if (is.null(irreparables)) {
+    irreparables <- !is.na(valores) &
+      grepl("\uFFFD", valores, fixed = TRUE)
+  }
+  claves <- .clave_bytes(valores[indices])
+  indices <- utils::head(indices[!duplicated(claves)], 5L)
+  origenes <- vapply(
+    indices, function(i) .comillas_sin_locale(valores[[i]], quote = '"'),
+    character(1L)
+  )
+  evidencias <- vapply(indices, function(i) {
+    origen <- .comillas_sin_locale(valores[[i]], quote = '"')
+    estado <- as.character(estados[[i]])
+    if (isTRUE(estado %in% c("reparado", "reparado_parcialmente"))) {
+      paste0(origen, " -> ",
+             .comillas_sin_locale(reparados[[i]], quote = '"'),
+             " [", estados[[i]], "]")
+    } else if (isTRUE(irreparables[[i]])) {
+      paste0(origen, " (contiene un car\u00e1cter de reemplazo irrecuperable)")
+    } else {
+      # El mismo texto que ya publicaba el camino sin vocabulario: la evidencia
+      # es un dato del perfil, y cambiarle la puntuacion la vuelve otra al
+      # comparar dos perfiles.
+      paste0(origen, " (mal convertido; el motor no pudo repararlo)")
+    }
+  }, character(1L))
+  paste(evidencias[!duplicated(origenes)], collapse = "; ")
+}
 .analizar_codificacion <- function(textos, max_iteraciones = 20L) {
   valores <- as.character(textos)
   reparados <- rep(NA_character_, length(valores))
@@ -1090,25 +1289,22 @@ names(.ftfy_tablas_bytes) <- c(
     pasos[candidatos] <- lapply(resultados[mapa], function(z) z[["pasos"]])
     consumidas[candidatos] <- lapply(resultados[mapa], function(z) z[["consumidas"]])
   }
-  reparables <- !is.na(reparados) & !is.na(valores) & reparados != valores & estados == "reparado"
-  parciales <- !is.na(reparados) & !is.na(valores) & reparados != valores & estados == "reparado_parcialmente"
-  irreparables <- !is.na(valores) & grepl("\uFFFD", valores, fixed = TRUE)
+  clasificacion <- .ftfy_mascaras_codificacion(valores, reparados, estados)
+  reparables <- clasificacion$reparables
+  parciales <- clasificacion$parciales
+  irreparables <- clasificacion$irreparables
   # El motor puede reconocer un texto mal convertido y no poder repararlo sin que
   # traiga el caracter de reemplazo. Quedaba fuera de los afectados: el perfil
   # publicaba `n_codificacion_no_se_pudo = 1` y `estado = "no_se_pudo"`, y sin
   # embargo ningun hallazgo ni accion. Ahora cuenta, una sola vez por valor.
-  no_se_pudo <- !is.na(valores) & !is.na(estados) & estados == "no_se_pudo"
-  afectados <- reparables | parciales | irreparables | no_se_pudo
-  ejemplos <- utils::head(which(afectados), 5L)
-  evidencia <- if (!length(ejemplos)) "" else paste(vapply(ejemplos, function(i) {
-    origen <- .comillas_sin_locale(valores[[i]], quote = '"')
-    if (reparables[[i]] || parciales[[i]]) paste0(origen, " -> ", .comillas_sin_locale(reparados[[i]], quote = '"'), " [", estados[[i]], "]")
-    else if (irreparables[[i]]) paste0(origen, " (contiene un car\u00e1cter de reemplazo irrecuperable)")
-    else paste0(origen, " (mal convertido; el motor no pudo repararlo)")
-  }, character(1L)), collapse = "; ")
+  no_se_pudo <- clasificacion$no_se_pudo
+  afectados <- clasificacion$afectados
+  evidencia <- .ftfy_evidencia_codificacion(
+    valores, reparados, estados, afectados, irreparables
+  )
   list(n = sum(afectados), n_reparables = sum(reparables),
        n_reparables_parcialmente = sum(parciales), n_irreparables = sum(irreparables),
-       n_no_se_pudo = sum(estados == "no_se_pudo", na.rm = TRUE), evidencia = evidencia,
+       n_no_se_pudo = sum(no_se_pudo), evidencia = evidencia,
        reparados = reparados, estados = estados, pasos = pasos,
        afectados = afectados, candidatos = detectados, valores = valores,
        consumidas = consumidas,

@@ -318,8 +318,12 @@
   # No alcanza con `entero`: por la puerta DBI casi todo llega como `doble`, y
   # varios lectores de CSV tambien. La densidad solo se mide cuando todos los
   # valores son enteros, asi que el tipo de almacenamiento no aporta nada.
-  numerico <- as.character(fila$tipo_inferido) %in% c("entero", "doble") ||
-    as.character(fila$tipo_declarado) %in% c("entero", "doble")
+  # `integer64` es la tercera forma de guardar lo mismo, y `.resumen_secuencia_entera()`
+  # ya la mide: sin ella aca, `bit64::as.integer64(1:1000)` era numeracion solo
+  # por la via de la secuencia densa, y con huecos no lo era.
+  tipos_numericos <- c("entero", "doble", "integer64")
+  numerico <- as.character(fila$tipo_inferido) %in% tipos_numericos ||
+    as.character(fila$tipo_declarado) %in% tipos_numericos
   if (!isTRUE(numerico)) return(FALSE)
   # Densa no alcanza: una numeracion casi no repite valores, y una magnitud que
   # lleno su rango si. Es la regla de `.numeracion_sin_repetir_conteos()`, con
@@ -330,6 +334,22 @@
     fila$frecuencia_moda
   )) {
     return(FALSE)
+  }
+  # La secuencia densa -`secuencia_entera_densa`, densidad 0,8 y veinte
+  # distintos- con unicidad de 0,9 es el caso mas claro de numeracion, y es un
+  # caso de esta regla, no otra regla: era `identificador_secuencial`, que
+  # decidia `posible_identificador` y `tipo_declarado_distinto` por su cuenta.
+  # Las dos guardas de forma de abajo no la descartan: con el tramo lleno en un
+  # 80 %, un bloque de treinta numeros borrados abre un "salto de escala" (31
+  # contra un hueco tipico de 1) y un centinela pegado al tramo hace sobresalir
+  # la moda, pero ninguno de los dos puede quedar fuera de los limites de Tukey
+  # y la columna sigue siendo la numeracion que era. Medido: sin esta linea,
+  # `1:3159` con un bloque borrado perdia `posible_identificador` y recibia
+  # `desviacion_benford`.
+  if (isTRUE(fila$secuencia_entera_densa) &&
+      isTRUE(is.finite(fila$tasa_distintos) &&
+               fila$tasa_distintos >= .MIN_TASA_DISTINTOS_IDENTIFICADOR)) {
+    return(TRUE)
   }
   # Un centinela adentro hunde la densidad y abre el salto: un identificador de
   # 1 a 4000 con quince `9999` pasaba de densidad 0,625 a 0,250 y dejaba de
@@ -354,6 +374,45 @@
   distintos <- suppressWarnings(as.numeric(fila$n_distintos))
   isTRUE(is.finite(densidad) && densidad >= .MIN_DENSIDAD_NUMERACION) &&
     isTRUE(is.finite(distintos) && distintos >= .MIN_DISTINTOS_NUMERACION)
+}
+
+# **Una sola respuesta a "es una numeracion?"** La contestaban cuatro reglas
+# dentro del mismo perfil, y no coincidian: `secuencia_entera_densa` (densidad
+# 0,8 y veinte distintos), su variante unica `identificador_secuencial` (que
+# apagaba `tipo_declarado_distinto`), `.parece_identificador_numerico()` (densidad
+# 0,5, cinco distintos, sin salto de escala, que apaga Tukey) y la condicion de
+# `posible_identificador`, que aceptaba cualquiera de ellas. Medido sobre
+# `as.character(sample(1:4557, 3159))`, densidad 0,693: el perfil la llamaba
+# identificador, proponia convertirla a numero y le marcaba `patron_raro` por
+# los valores de una cifra, que en una numeracion que arranca en 1 son su
+# comienzo y no un desvio. La misma columna sin huecos recibia solo el primero.
+#
+# Ahora decide `.parece_identificador_numerico()`, con sus guardas de cantidad y
+# de tipo, y esa respuesta (`numeracion`) es la que leen `posible_identificador`,
+# la exclusion de la conversion en `tipo_declarado_distinto` y los desvios de
+# `patron_raro` (`.perfilar_columna()`). `secuencia_entera_densa` sigue
+# publicada como medicion de cobertura del tramo, sin decidir si la columna es
+# un identificador; la numeracion densa y casi unica -lo que era
+# `identificador_secuencial`- es un caso de la numeracion, no una regla aparte,
+# y la evidencia de `posible_identificador` lo publica con
+# `secuencia_entera_densa=TRUE`.
+#
+# `posible_identificador` tiene ademas la otra puerta, que no es una numeracion:
+# el texto con forma de identificador -ceros a la izquierda, letras y digitos-
+# que `tipos.R` infiere como `identificador` con la misma unicidad de 0,9.
+.decision_identificador_numerico <- function(fila) {
+  numeracion <- .parece_identificador_numerico(fila)
+  n_validos <- suppressWarnings(as.numeric(
+    fila$n_aplicables - fila$n_faltantes
+  ))
+  forma_identificador <-
+    identical(as.character(fila$tipo_inferido), "identificador") &&
+    isTRUE(is.finite(fila$tasa_distintos) &&
+             fila$tasa_distintos >= .MIN_TASA_DISTINTOS_IDENTIFICADOR)
+  list(
+    parece = numeracion,
+    posible = isTRUE(n_validos > 1) && (numeracion || forma_identificador)
+  )
 }
 
 .cobertura_diagnosticos_vacia <- function() {
@@ -401,8 +460,11 @@
   }
 }
 
+# `largo_esperado` dice si la columna trae por construccion valores de todos los
+# largos de digitos -una numeracion o un tramo de enteros lleno-; ver el
+# llamado en `.perfilar_columna()`.
 .desvios_patron_raro_detectados <- function(patrones,
-                                            secuencia_entera_densa,
+                                            largo_esperado,
                                             umbral_patron_raro) {
   resumen <- attr(patrones, "resumen_patrones", exact = TRUE)
   if (is.null(resumen) || !is.data.frame(resumen) || !nrow(resumen)) {
@@ -418,7 +480,7 @@
     ])
   }
   raros <- unique(raros[!is.na(raros)])
-  if (isTRUE(secuencia_entera_densa) && length(raros)) {
+  if (isTRUE(largo_esperado) && length(raros)) {
     solo_largo <- .patrones_solo_largo_corrida_numerica(
       resumen$patron[[1L]], raros
     )
@@ -592,6 +654,13 @@
 }
 
 .valores_orden_columna <- function(x, fila, formatos) {
+  # El texto que midio el perfil, como en `.valores_cuantitativos_hallazgo()`:
+  # sobre la columna cruda, una celda sin marca que no es UTF-8 valido hacia
+  # abortar `trimws()` en una sesion UTF-8, el `tryCatch()` de abajo devolvia
+  # `NULL` y la columna salia de la comparacion de orden sin que el alcance lo
+  # dijera; bajo `C` se leia y la celda se contaba en
+  # `n_valores_excluidos_conversion`.
+  if (is.character(x) || is.factor(x)) x <- .texto_analizable(x)$valores
   inferencia <- list(
     tipo = as.character(fila$tipo_inferido[[1L]]),
     muestreado = isTRUE(fila$muestreado_tipo_inferido[[1L]]),
@@ -1286,11 +1355,22 @@
   # Arreglar un consumidor y dejar el otro es peor que no arreglar ninguno: la
   # nota que anuncia el arreglo pasa a ser cierta a medias.
   perfil_columna <- .normalizacion_para_columna(perfil, columna)
-  textos_comparados <- textos
-  textos_comparados[presentes] <- .normalizacion_aplicar(
-    textos[presentes], perfil_columna
+  # La normalizacion es valor a valor: se calcula una vez por forma distinta y
+  # se reparte a las filas. Normalizar cada fila repetia el trabajo tantas
+  # veces como se repite el valor -sobre una mezcla de 200.000 filas era el 40 %
+  # de este diagnostico-, y las formas normalizadas se reusan abajo para
+  # comparar.
+  presentes_texto <- textos[presentes]
+  formas_presentes <- unique(presentes_texto)
+  normalizadas_presentes <- .normalizacion_aplicar(
+    formas_presentes, perfil_columna
   )
-  largos_comparados <- .nchar_texto_seguro(textos_comparados[presentes])
+  textos_comparados <- textos
+  textos_comparados[presentes] <- normalizadas_presentes[
+    match(presentes_texto, formas_presentes)
+  ]
+  # El largo maximo es el mismo sobre las formas que sobre las filas.
+  largos_comparados <- .nchar_texto_seguro(normalizadas_presentes)
   largos_comparados <- largos_comparados[is.finite(largos_comparados)]
   # Un solo numero para las dos ramas. Antes, la que excluia publicaba el largo
   # comparado y la que no excluia publicaba el crudo: el mismo campo significaba
@@ -1332,8 +1412,7 @@
   # `method = "radix"` no es un detalle: el orden por omision depende de la
   # configuracion regional de la maquina, y eso cambiaria el resultado de una
   # computadora a otra. El radix ordena por bytes, igual en todas.
-  presentes_texto <- textos[presentes]
-  formas <- .ordenar_por_bytes(unique(presentes_texto))
+  formas <- .ordenar_por_bytes(formas_presentes)
   n_total <- length(formas)
   n_evaluados <- min(n_total, max_valores)
   crudos <- formas[seq_len(n_evaluados)]
@@ -1367,7 +1446,7 @@
     publicables[formas_mezcladas] <- crudos[formas_mezcladas]
   }
   frecuencias <- tabulate(posicion[!is.na(posicion)], nbins = n_evaluados)
-  normalizados <- .normalizacion_aplicar(crudos, perfil_columna)
+  normalizados <- normalizadas_presentes[match(crudos, formas_presentes)]
   clases <- match(normalizados, unique(normalizados))
   n_unidades <- max(clases, 0L)
   valores_norm <- unique(normalizados)
@@ -2793,6 +2872,12 @@
   )
 }
 
+# Los hallazgos que cuentan formatos de fecha y no filas. Los nombra el conteo,
+# que les pone la unidad, y la traza, que les busca las celdas.
+.TIPOS_HALLAZGO_FORMATO_FECHA <- c(
+  "formato_fecha_ambiguo", "anio_de_dos_digitos", "formatos_fecha_mixtos"
+)
+
 .conteo_hallazgo_columna <- function(tipo, fila, resultado, n_validos) {
   n <- if (length(fila$n) && is.finite(fila$n[[1L]])) {
     as.numeric(fila$n[[1L]])
@@ -2910,9 +2995,7 @@
       NA_real_
     }
   }
-  unidad <- if (tipo %in% c(
-    "formato_fecha_ambiguo", "anio_de_dos_digitos", "formatos_fecha_mixtos"
-  )) {
+  unidad <- if (tipo %in% .TIPOS_HALLAZGO_FORMATO_FECHA) {
     "formato"
   } else if (tipo %in% c(
     "mayusculas_inconsistentes", "normalizacion_unicode"
@@ -3253,6 +3336,32 @@
   cuantitativos
 }
 
+# El texto de la columna tal como lo analizo el perfil: lo que
+# `.texto_analizable()` deja leer, con las filas de fuera del universo como
+# ausentes. Lo usan las trazas que vuelven a mirar el texto, para mirar el mismo
+# que midio el hallazgo.
+#
+# El universo aplicable entra ACA, antes de formar los grupos, y no despues
+# recortando el resultado. Recortar deja la traza nombrando filas que el conteo
+# no cuenta: medido, con `A`, `a` y `c` aplicables y `c`, `C` fuera del universo,
+# `mayusculas_inconsistentes` contaba 2 valores distintos y citaba `"A"; "a"`,
+# mientras la traza nombraba las filas 1, 2 y 3 -la 3 vale `c`, que colisiona con
+# la `C` de una fila NO aplicable-. Dos universos en la misma fila del hallazgo, y
+# el propio paquete disparando su alarma de trazabilidad incoherente sobre un
+# perfil intacto.
+#
+# Es el mismo paso que `columnas.R` ya hace antes de diagnosticar el texto, y por
+# el mismo motivo: se marca como ausente en vez de recortar el vector, para que
+# los indices de fila sigan alineados con la tabla.
+.texto_en_el_universo <- function(x, aplicable = NULL) {
+  texto <- tryCatch(.texto_analizable(x)$valores, error = function(e) NULL)
+  if (!is.null(texto) && !is.null(aplicable) &&
+      length(aplicable) == length(texto) && !all(aplicable)) {
+    texto[!aplicable] <- NA
+  }
+  texto
+}
+
 .indices_hallazgo_columna <- function(tipo, x, fila, resultado,
                                       expandir = FALSE,
                                       distinguir_mayusculas = TRUE,
@@ -3346,25 +3455,8 @@
   }
   n <- length(x)
   if (!n) return(integer())
-  texto <- tryCatch(.texto_analizable(x)$valores, error = function(e) NULL)
+  texto <- .texto_en_el_universo(x, aplicable)
   texto_completo <- texto
-  # El universo aplicable entra ACA, antes de formar los grupos, y no despues
-  # recortando el resultado. Recortar deja la traza nombrando filas que el conteo
-  # no cuenta: medido, con `A`, `a` y `c` aplicables y `c`, `C` fuera del universo,
-  # `mayusculas_inconsistentes` contaba 2 valores distintos y citaba `"A"; "a"`,
-  # mientras la traza nombraba las filas 1, 2 y 3 -la 3 vale `c`, que colisiona con
-  # la `C` de una fila NO aplicable-. Dos universos en la misma fila del hallazgo, y
-  # el propio paquete disparando su alarma de trazabilidad incoherente sobre un
-  # perfil intacto.
-  #
-  # Es el mismo paso que `columnas.R` ya hace antes de diagnosticar el texto, y por
-  # el mismo motivo: se marca como ausente en vez de recortar el vector, para que
-  # los indices de fila sigan alineados con la tabla.
-  if (!is.null(texto) && !is.null(aplicable) &&
-      length(aplicable) == length(texto) && !all(aplicable)) {
-    texto[!aplicable] <- NA
-    texto_completo[!aplicable] <- NA
-  }
   mascara_largos <- tryCatch(resultado$texto_largo$mascara,
                               error = function(e) NULL)
   if (is.character(texto) && is.logical(mascara_largos) &&
@@ -3488,28 +3580,16 @@
           which(cod$afectados)
       }
     },
-    numero_como_texto = if (is.null(texto_completo)) NULL else {
-      partes <- tryCatch(.componentes_numero_texto_optimizado(texto_completo),
-                         error = function(e) NULL)
-      if (is.null(partes)) NULL else which(
-        !is.na(texto_completo) & nzchar(texto_completo) & partes$compatible &
-          partes$especial
-      )
-    },
-    unidades_mixtas = if (is.null(texto_completo)) NULL else {
-      partes <- tryCatch(.componentes_numero_texto_optimizado(texto_completo),
-                         error = function(e) NULL)
-      if (is.null(partes)) NULL else which(
-        !is.na(texto_completo) & nzchar(texto_completo) & partes$compatible &
-          nzchar(partes$unidad)
-      )
-    },
+    numero_como_texto = ,
+    unidades_mixtas = ,
     monedas_mixtas = if (is.null(texto_completo)) NULL else {
-      partes <- tryCatch(.componentes_numero_texto_optimizado(texto_completo),
-                         error = function(e) NULL)
-      if (is.null(partes)) NULL else which(
-        !is.na(texto_completo) & nzchar(texto_completo) & partes$compatible &
-          nzchar(partes$moneda)
+      # La mascara del perfil si la armo sobre este mismo texto: ver
+      # `.cache_trazas_numero()`.
+      mascara <- .mascara_trazas_numero(
+        resultado$numeros_texto$cache_trazas_numero, texto_completo, tipo
+      )
+      if (is.null(mascara)) NULL else which(
+        !is.na(texto_completo) & nzchar(texto_completo) & mascara
       )
     },
     celdas_multivaluadas = if (is.null(resultado$multivaluados)) NULL else {
@@ -3602,15 +3682,19 @@
                                    resultados, expandir, aproximados,
                                    indice_hallazgo, tipos_hallazgos, limite,
                                    distinguir_mayusculas = TRUE,
-                                  clave = NULL, posicion = NULL) {
+                                  clave = NULL, posicion = NULL,
+                                  asignaciones_fecha = NULL) {
   unidad <- as.character(hallazgo$unidad_conteo[[1L]])
-  if (unidad %in% c("columna", "formato")) {
+  # Solo lo contado en columnas no tiene filas que nombrar. Un hallazgo contado
+  # en formatos si: las celdas escritas en esos formatos (mas abajo).
+  if (identical(unidad, "columna")) {
     return(.trazabilidad_vacia("no_aplica", alcance = "no_aplica", limite = limite))
   }
   trazabilidad_precalculada <- hallazgo$trazabilidad[[1L]]
   if (tipo %in% c(
       "casi_duplicados_vocabulario", "variantes_equifrecuentes_vocabulario",
-      "fecha_nacimiento_fuera_rango", "fecha_fallecimiento_fuera_rango"
+      "fecha_nacimiento_fuera_rango", "fecha_fallecimiento_fuera_rango",
+      "posible_ausencia_estructural", "regla_silencia_ausencia"
     ) &&
       is.list(trazabilidad_precalculada) &&
       !identical(trazabilidad_precalculada$estado, "no_disponible")) {
@@ -3756,7 +3840,11 @@
     traza$columnas <- nombres_par
     return(traza)
   }
-  if (tipo == "relacion_aritmetica_columnas") {
+  # Las dos relaciones cuya traza deja armada su detector, con todas las filas
+  # que la rompen (o con las primeras y su total): aca solo se recorta al tope.
+  if (tipo %in% c(
+      "relacion_aritmetica_columnas", "relacion_funcional_columnas"
+    )) {
     trazabilidad <- hallazgo$trazabilidad[[1L]]
     if (!is.list(trazabilidad)) {
       return(.trazabilidad_vacia(limite = limite))
@@ -3787,6 +3875,12 @@
   nombre <- as.character(hallazgo$columna[[1L]])
   indice <- .indice_columna_hallazgo(nombre, nombres, posicion)
   if (is.na(indice)) return(.trazabilidad_vacia(limite = limite))
+  if (tipo %in% .TIPOS_HALLAZGO_FORMATO_FECHA) {
+    return(.trazabilidad_formato_fecha(
+      tipo, datos, indice, resultados[[indice]], limite, clave,
+      asignaciones_fecha
+    ))
+  }
   indices <- .indices_hallazgo_columna(
     tipo, datos[[indice]], resultados[[indice]]$fila,
     resultados[[indice]], expandir, distinguir_mayusculas,
@@ -3822,12 +3916,105 @@
     )
     return(traza)
   }
+  if (tipo == "faltantes_disfrazados") {
+    traza <- if (is.null(indices)) {
+      .trazabilidad_vacia(limite = limite)
+    } else {
+      .trazabilidad_indices(
+        indices, "completo", limite, clave = clave, datos = datos
+      )
+    }
+    # Los centinelas numericos que el detector conto en la columna: la evidencia
+    # muestra solo las seis marcas mas frecuentes, y el plan de limpieza
+    # necesita el conjunto entero para convertir esas celdas y ninguna otra.
+    # Con la traza vacia tambien: que no haya indices no cambia que se conto.
+    contados <- resultados[[indice]]$faltantes_disfrazados$sentinelas_contados
+    traza$sentinelas_contados <- if (is.numeric(contados)) {
+      as.numeric(contados)
+    } else {
+      numeric()
+    }
+    return(traza)
+  }
   if (is.null(indices)) {
     return(.trazabilidad_vacia(limite = limite))
   }
   .trazabilidad_indices(
     indices, "completo", limite, clave = clave, datos = datos
   )
+}
+
+# La traza de un hallazgo que cuenta formatos de fecha: las celdas escritas en
+# formatos con el problema que el hallazgo afirma. Es la regla de la unidad hermana
+# `valor_distinto` con el formato en el lugar del valor, y por eso `total` no es
+# `n_afectados` -uno cuenta filas y el otro formatos-.
+#
+# - `formatos_fecha_mixtos` cuenta todos los formatos: van todas las filas con
+#   fecha, las de las representaciones no dominantes primero para que el tope
+#   no se lleve lo accionable, y el reparto con los nombres que ya usan los
+#   hallazgos de vocabulario.
+# - `anio_de_dos_digitos`: toda fila cuya escritura solo admite lecturas con el
+#   ano de dos cifras, tambien las que dos de esas lecturas aceptan y no cuenta
+#   el `n` de ninguna -`01/12/20` entre `%d/%m/%y` y `%m/%d/%y`-.
+# - `formato_fecha_ambiguo`: toda fila escrita en una lectura que la columna
+#   entera no puede resolver.
+#
+# Las filas salen de la columna ENTERA, y los formatos tambien: la traza
+# contesta en que filas esta el problema, y eso no depende de lo que vio la
+# muestra. Puede nombrar filas escritas en formatos que la muestra no llego a
+# ver; la evidencia y `n_afectados` siguen siendo los de la muestra.
+# Eso cuesta una segunda deteccion, y por eso se paga solo aca -cuando el
+# hallazgo salio- y una vez por columna: `asignaciones`, un entorno que comparten
+# los hallazgos de la misma llamada, guarda la de cada columna para sus tres
+# tipos.
+.trazabilidad_formato_fecha <- function(tipo, datos, indice, resultado,
+                                        limite, clave = NULL,
+                                        asignaciones = NULL) {
+  llave <- as.character(indice)
+  asignacion <- if (is.environment(asignaciones)) asignaciones[[llave]] else NULL
+  if (is.null(asignacion)) {
+    texto <- .texto_en_el_universo(datos[[indice]], resultado$aplicable)
+    asignacion <- if (is.character(texto)) {
+      tryCatch(.filas_formatos_fecha(texto), error = function(e) NULL)
+    } else NULL
+    # `FALSE` y no `NULL`: que no haya asignacion tambien se recuerda.
+    if (is.null(asignacion)) asignacion <- FALSE
+    if (is.environment(asignaciones)) asignaciones[[llave]] <- asignacion
+  }
+  if (!is.list(asignacion)) return(.trazabilidad_vacia(limite = limite))
+  reparto <- NULL
+  if (identical(tipo, "formatos_fecha_mixtos")) {
+    reparto <- .reparto_filas_formatos_fecha(asignacion)
+    indices <- c(reparto$variantes, reparto$dominantes)
+  } else if (identical(tipo, "anio_de_dos_digitos")) {
+    indices <- .filas_de_formatos_fecha(
+      asignacion, .lecturas_anio_corto(asignacion)
+    )
+  } else {
+    indices <- .filas_de_formatos_fecha(
+      asignacion, .formatos_fecha_ambiguos(asignacion$tabla)$formato
+    )
+    # La muestra no pudo resolver una lectura que la columna entera si
+    # resuelve -los valores que la deciden cayeron fuera de la muestra-: no
+    # queda ninguna fila ambigua del modo que el hallazgo dice. Se nombran
+    # entonces las celdas que admiten dos o mas de las lecturas que el hallazgo
+    # cita, que son las que lo hicieron salir; nombrar ninguna dejaria un
+    # hallazgo de formato sin filas.
+    if (!length(indices)) {
+      indices <- .filas_que_admiten_varias(
+        asignacion, .formatos_fecha_ambiguos(resultado$formatos)$formato
+      )
+    }
+  }
+  traza <- .trazabilidad_indices(indices, "completo", limite = Inf)
+  if (identical(traza$estado, "no_disponible")) {
+    return(.trazabilidad_vacia(limite = limite))
+  }
+  if (!is.null(reparto)) {
+    traza$n_filas_formas_variantes <- length(reparto$variantes)
+    traza$n_filas_formas_dominantes <- length(reparto$dominantes)
+  }
+  .limitar_trazabilidad(traza, limite = limite, clave = clave, datos = datos)
 }
 
 .agregar_trazabilidad_hallazgos <- function(
@@ -3844,17 +4031,20 @@
   posiciones <- lapply(hallazgos$trazabilidad, function(traza) {
     if (is.list(traza)) traza[["posicion_columna"]] else NULL
   })
-  # Un hallazgo contado en columnas o en formatos no tiene filas que trazar, y
+  # Un hallazgo contado en columnas no tiene filas que trazar, y
   # `.trazabilidad_hallazgo()` le devuelve la traza `no_aplica` antes de mirar
   # nada mas. Se resuelve aca, sin extraer la fila con `hallazgos[i, ]`: cuando
   # `columnas_duplicadas` publicaba un hallazgo por par, 300 columnas iguales
   # eran 44.850, y extraer cada fila de esa tabla costaba 4,4 de los 10,1 s de
   # esta funcion. Sigue valiendo para cualquier tabla con muchos hallazgos
   # contados en columnas.
-  sin_filas <- as.character(hallazgos$unidad_conteo) %in% c("columna", "formato")
+  sin_filas <- as.character(hallazgos$unidad_conteo) %in% "columna"
   traza_no_aplica <- .trazabilidad_vacia(
     "no_aplica", alcance = "no_aplica", limite = limite
   )
+  # Ver `.trazabilidad_formato_fecha()`: una deteccion por columna, no por
+  # hallazgo.
+  asignaciones_fecha <- new.env(parent = emptyenv())
   trazabilidad <- vector("list", nrow(hallazgos))
   trazabilidad[sin_filas] <- list(traza_no_aplica)
   trazabilidad[!sin_filas] <- lapply(which(!sin_filas), function(i) {
@@ -3862,7 +4052,7 @@
       as.character(hallazgos$tipo_hallazgo[[i]]), hallazgos[i, , drop = FALSE],
       datos, nombres, resultados, expandir, aproximados, i,
       tipos_hallazgos, limite, distinguir_mayusculas, clave = clave,
-      posicion = posiciones[[i]]
+      posicion = posiciones[[i]], asignaciones_fecha = asignaciones_fecha
     )
     if (is.list(traza)) traza[["posicion_columna"]] <- NULL
     traza
@@ -3991,22 +4181,38 @@
   )
 }
 
+# Un hallazgo informativo (`ok`) que cuenta filas: `posible_ausencia_estructural`
+# y `regla_silencia_ausencia`. Los demas informativos cuentan columnas o cuentan
+# cero, y no tienen filas que deber.
+.informativo_cuenta_filas <- function(unidad, afectados) {
+  !is.na(unidad) & unidad == "fila" & is.finite(afectados) & afectados > 0
+}
+
 .advertir_incoherencias_trazabilidad <- function(hallazgos, datos = NULL,
                                                  nombres = NULL,
                                                  aplicables = NULL,
                                                  posiciones = NULL) {
   if (!nrow(hallazgos)) return(invisible(hallazgos))
   # Sin `severidad` no se puede decidir: la guarda salta los hallazgos
-  # informativos -que cuentan cero por definicion- comparando ese campo, y sin
+  # informativos que no cuentan filas comparando ese campo, y sin
   # el acusaria a todos. Desde que esta guarda corre tambien al PUBLICAR, le
   # llegan objetos a los que les falta una columna, y acusar sin el campo que
   # decide es una acusacion falsa.
   campos <- c("severidad", "n_afectados", "unidad_conteo", "trazabilidad")
   if (!all(campos %in% names(hallazgos))) return(invisible(hallazgos))
   problemas <- character()
+  # La guarda corre en dos momentos: al construir el perfil, con los datos, y
+  # al publicarlo -`hallazgos()`, `reportar()`-, sin ellos. Lo que se construye
+  # ahora tiene que nombrar las filas de todo hallazgo que las cuenta. Lo que se
+  # publica puede ser un perfil guardado por una version anterior, que dejaba
+  # sin filas a los hallazgos de formato de fecha (`no_aplica`) y a los dos
+  # informativos de ausencia (la traza vacia con la que nacen): esas dos formas
+  # se toleran solo ahi. Acusarlas seria avisar, sobre un archivo de ayer, de un
+  # problema que ese archivo no tiene.
+  construyendo <- !is.null(datos)
   # Las filas que el recorrido de abajo saltea sin acusar nada se separan antes,
   # de una vez: las informativas (`ok`), las que no traen una traza, y las
-  # contadas en columnas o formatos con su traza `no_aplica`. Cuando
+  # contadas en columnas con su traza `no_aplica`. Cuando
   # `columnas_duplicadas` publicaba un hallazgo por par, 1.000 columnas iguales
   # eran 499.500, todos de la ultima clase, y recorrerlos de a uno costaba 10 s
   # al perfilar y otros 8 en cada `hallazgos()`. Las demas filas siguen el recorrido completo, en el
@@ -4021,11 +4227,13 @@
     severidades <- as.character(hallazgos$severidad)
     afectados_todos <- hallazgos$n_afectados
     unidades <- as.character(hallazgos$unidad_conteo)
-    informativa <- !is.na(severidades) & severidades == "ok"
+    informativa <- !is.na(severidades) & severidades == "ok" &
+      !.informativo_cuenta_filas(unidades, afectados_todos)
     sin_traza <- !vapply(trazas, is.list, logical(1L))
     no_aplica_declarada <- !informativa & !sin_traza &
       is.finite(afectados_todos) & afectados_todos != 0 &
-      !is.na(unidades) & unidades %in% c("columna", "formato")
+      !is.na(unidades) &
+      (unidades == "columna" | (unidades == "formato" & !construyendo))
     no_aplica_declarada[no_aplica_declarada] <- vapply(
       trazas[no_aplica_declarada], function(traza) {
         identical(traza$estado, "no_aplica") ||
@@ -4039,7 +4247,14 @@
     afectados <- hallazgos$n_afectados[[i]]
     unidad <- as.character(hallazgos$unidad_conteo[[i]])
     traza <- hallazgos$trazabilidad[[i]]
-    if (identical(severidad, "ok") || !is.list(traza)) next
+    if (!is.list(traza)) next
+    # Un informativo no afirma un defecto y casi siempre cuenta columnas o
+    # cuenta cero. El que cuenta filas se revisa como cualquier otro: decia
+    # "200 ausencias" sin nombrar ninguna y la guarda no lo miraba.
+    informativo <- identical(severidad, "ok")
+    if (informativo && !isTRUE(.informativo_cuenta_filas(unidad, afectados))) {
+      next
+    }
     etiqueta <- paste0(
       as.character(hallazgos$tipo_hallazgo[[i]]), " en ",
       as.character(hallazgos$columna[[i]])
@@ -4051,7 +4266,15 @@
     if (!isTRUE(is.finite(afectados)) || is.na(unidad)) next
     no_aplica <- identical(traza$estado, "no_aplica") ||
       identical(traza$alcance, "no_aplica")
-    if (unidad %in% c("columna", "formato") && !no_aplica) {
+    if (identical(unidad, "formato") && no_aplica) {
+      if (construyendo) {
+        problemas <- c(problemas, paste0(
+          etiqueta, ": hallazgo de formato sin filas"
+        ))
+      }
+      next
+    }
+    if (identical(unidad, "columna") && !no_aplica) {
       problemas <- c(problemas, paste0(etiqueta, ": falta no_aplica"))
       next
     }
@@ -4063,6 +4286,8 @@
     if (identical(traza$estado, "no_disponible") &&
         identical(traza$alcance, .ALCANCE_TRAZA_ORDEN_INESTABLE)) next
     if (identical(traza$estado, "no_disponible")) {
+      if (informativo && !construyendo &&
+          identical(traza$alcance, "no_evaluado")) next
       problemas <- c(problemas, paste0(etiqueta, ": traza no disponible"))
       next
     }
@@ -4072,6 +4297,19 @@
         (total != length(indices) && !isTRUE(traza$truncado))) {
       problemas <- c(problemas, paste0(
         etiqueta, ": total de traza no coincide con sus \u00edndices"
+      ))
+      next
+    }
+    # El reparto entre formas variantes y dominantes parte el total: si no lo
+    # suma, `mostrados_formas_variantes` ya no dice cuantas de las filas
+    # mostradas son las accionables.
+    variantes <- traza$n_filas_formas_variantes
+    dominantes <- traza$n_filas_formas_dominantes
+    if ((length(variantes) || length(dominantes)) &&
+        !isTRUE(length(variantes) == 1L && length(dominantes) == 1L &&
+                  variantes + dominantes == total)) {
+      problemas <- c(problemas, paste0(
+        etiqueta, ": el reparto de la traza no suma su total"
       ))
       next
     }
@@ -4115,7 +4353,7 @@
       }
     }
   }
-  # Las seis condiciones de arriba comparan dos salidas del propio `lupa` -lo que
+  # Las condiciones de arriba comparan dos salidas del propio `lupa` -lo que
   # el hallazgo afirma contra las filas que se le adjuntaron-, y ninguna mira los
   # datos del usuario. No hay nada que corregir en la tabla, y decir "la
   # trazabilidad contiene incoherencias" mandaba a buscar en los datos algo que
@@ -4668,13 +4906,13 @@
     # no era defendible era el motivo publicado, que nombraba una disyuncion de
     # tres condiciones sin decir cual, con dos de ellas falsas en esa salida. Eso
     # se arreglo en `benford.R`: ahora el motivo nombra el hecho.
-    if (isTRUE(n_validos > 1L) &&
-        (fila$tipo_inferido == "identificador" ||
-         isTRUE(fila$secuencia_entera_densa) ||
-         .parece_identificador_numerico(fila)) &&
-        (isTRUE(is.finite(fila$tasa_distintos) &&
-                  fila$tasa_distintos >= .MIN_TASA_DISTINTOS_IDENTIFICADOR) ||
-         .parece_identificador_numerico(fila))) {
+    #
+    # Dentro de la fila resumida la respuesta si es una: la de la guarda de
+    # Tukey, que tambien decide `tipo_declarado_distinto` y `patron_raro`. La
+    # condicion de aca aceptaba ademas una secuencia densa y unica que esa
+    # guarda rechazaba. Ver `.decision_identificador_numerico()`.
+    decision_identificador <- .decision_identificador_numerico(fila)
+    if (isTRUE(decision_identificador$posible)) {
       # Una numeracion puede ser casi unica -un identificador de fila- o
       # repetirse mucho -un codigo de catalogo-, y son dos cosas distintas que
       # merecen dos textos distintos. Exigir unicidad alta para las dos dejaba
@@ -4856,11 +5094,7 @@
       ))
     }
 
-    candidatos_fecha <- resultado$formatos[
-      resultado$formatos$estado == "candidato" &
-        (!resultado$formatos$anio_dos_digitos |
-           resultado$formatos$n_inequivocos == 0L), , drop = FALSE
-    ]
+    candidatos_fecha <- .formatos_fecha_ambiguos(resultado$formatos)
     if (nrow(candidatos_fecha) &&
         fila$tipo_inferido %in% c("fecha", "fecha-hora")) {
       # Con guion y dos cifras la ambiguedad tambien puede ser del ano con el
@@ -4885,9 +5119,7 @@
       ))
     }
 
-    formatos_anio_corto <- resultado$formatos[
-      resultado$formatos$anio_dos_digitos, , drop = FALSE
-    ]
+    formatos_anio_corto <- .formatos_fecha_anio_corto(resultado$formatos)
     if (nrow(formatos_anio_corto) &&
         fila$tipo_inferido %in% c("fecha", "fecha-hora")) {
       agregar(.nuevo_hallazgo(
@@ -5091,9 +5323,12 @@
       ))
     }
 
-    identificador_secuencial <- isTRUE(fila$secuencia_entera_densa) &&
-      is.finite(fila$tasa_distintos) &&
-      fila$tasa_distintos >= .MIN_TASA_DISTINTOS_IDENTIFICADOR
+    # Una numeracion no es una magnitud que convertir: la misma respuesta que
+    # publico `posible_identificador` unas lineas arriba. Se exigia aca una
+    # numeracion densa y casi unica, otra regla, y un identificador con huecos
+    # -densidad 0,693- recibia a la vez "posible identificador" y "convertir a
+    # numero". Ver `.decision_identificador_numerico()`.
+    numeracion <- isTRUE(decision_identificador$parece)
     # Un codigo declarado en `columnas_codigo` y guardado como texto ya tiene su
     # tipo: el hallazgo pedia "convertir la columna de forma explicita" a numero,
     # que es la magnitud que la declaracion niega -`"006"` pierde el cero-.
@@ -5102,7 +5337,7 @@
         c("texto", "factor", "factor-ordenado") &&
       as.character(fila$tipo_inferido) %in% c("entero", "doble", "integer64")
     if (!.tipos_equivalentes(fila$tipo_declarado, fila$tipo_inferido) &&
-        fila$tipo_inferido != "desconocido" && !identificador_secuencial &&
+        fila$tipo_inferido != "desconocido" && !numeracion &&
         !codigo_en_texto) {
       # La proporcion compatible se calculaba, se imprimia en la evidencia y no
       # decidia nada: el hallazgo sugeria "convertir la columna" igual con 0,98
@@ -5132,7 +5367,8 @@
           # Los meses escritos que la inferencia ya leyo: sin ellos se volvian a
           # detectar, una pasada entera sobre la columna por segunda vez.
           meses_texto = attr(resultado$inferencia$formatos_fecha, "meses_texto",
-                             exact = TRUE)
+                             exact = TRUE),
+          numeros_texto = resultado$numeros_texto
         )
       } else character()
       sin_perdida <- isTRUE(compatible == 1) && !is.null(riesgos_conversion) &&
@@ -5319,7 +5555,7 @@
           "; ejemplos: ",
           resultado$diagnostico_texto$evidencia_espacios
         ),
-        "Aplicar trimws() despu\u00e9s de confirmar que los espacios no son significativos."
+        "Recortar los espacios del borde, tambi\u00e9n los de Unicode como el espacio duro, que trimws() no quita, despu\u00e9s de confirmar que no son significativos."
       ))
     }
     if (isTRUE(fila$n_controles_invisibles > 0L)) {
@@ -5341,8 +5577,23 @@
         as.numeric(fila$n_invisibles_significativos)
       )
       hay <- function(x) isTRUE(is.finite(x) && x > 0)
-      solo_significativos <- hay(significativos) && !hay(eliminables) &&
-        !hay(espacios)
+      # Las etiquetas Unicode de las banderas se cuentan entre los controles y,
+      # como ZWJ/ZWNJ, no se quitan: pueden ser parte del texto. El hallazgo las
+      # trata igual -`sospechoso`- y las nombra, porque una columna con
+      # banderas de Escocia no tiene ningun ZWJ.
+      etiquetas <- suppressWarnings(
+        as.numeric(resultado$diagnostico_texto$n_etiquetas_unicode)
+      )
+      solo_significativos <- (hay(significativos) || hay(etiquetas)) &&
+        !hay(eliminables) && !hay(espacios)
+      con_etiquetas <- solo_significativos && hay(etiquetas)
+      # Y puede no haber nada de eso: el control se conto pero la accion no lo
+      # quita, porque es parte de una letra mal convertida o porque sin el la
+      # celda se leeria como una. El hallazgo recomendaba eliminarlo con un plan
+      # que no traia ninguna accion para hacerlo. Se exige el cero medido: un
+      # conteo que no se pudo medir no dice que no haya accion.
+      sin_accion <- isTRUE(eliminables == 0) && isTRUE(espacios == 0) &&
+        isTRUE(significativos == 0) && !hay(etiquetas)
       # Cuando solo hay uniones de ancho cero no hay nada que ELIMINAR, pero eso
       # no las vuelve correctas: un ZWJ entre `Juan` y `Perez` no tiene funcion
       # tipografica -el ZWJ une emojis y liga escrituras arabes o indicas, no
@@ -5353,12 +5604,27 @@
       agregar(.nuevo_hallazgo(
         nombre, "controles_invisibles",
         if (solo_significativos) "sospechoso" else "error",
-        if (solo_significativos) {
+        if (con_etiquetas) {
+          paste(
+            "Los \u00fanicos caracteres invisibles son de los que forman parte de",
+            "una secuencia: etiquetas Unicode, que arman banderas como la de",
+            "Escocia detr\u00e1s de U+1F3F4, o uniones de ancho cero (ZWJ/ZWNJ),",
+            "que unen emojis y ligan escrituras como el \u00e1rabe. Fuera de su",
+            "secuencia no cumplen ninguna funci\u00f3n y rompen las comparaciones",
+            "sin verse."
+          )
+        } else if (solo_significativos) {
           paste(
             "Los \u00fanicos caracteres invisibles son uniones de ancho cero",
             "(ZWJ/ZWNJ). Unen emojis y ligan escrituras como el \u00e1rabe, y ah\u00ed",
             "forman parte del texto; entre letras latinas no cumplen ninguna",
             "funci\u00f3n y rompen las comparaciones sin verse."
+          )
+        } else if (sin_accion) {
+          paste(
+            "Hay controles invisibles que ninguna acci\u00f3n del plan quita: son",
+            "parte de una letra mal convertida, o sin ellos la celda se leer\u00eda",
+            "como una y la reparaci\u00f3n de la codificaci\u00f3n la cambiar\u00eda."
           )
         } else {
           paste0(
@@ -5367,11 +5633,23 @@
           )
         },
         resultado$diagnostico_texto$evidencia_controles_invisibles,
-        if (solo_significativos) {
+        if (con_etiquetas) {
+          paste(
+            "Mirar entre qu\u00e9 caracteres est\u00e1n: si forman un emoji o ligan",
+            "una escritura que lo requiere, no hay nada que hacer; si separan",
+            "palabras, hay que eliminarlos."
+          )
+        } else if (solo_significativos) {
           paste(
             "Mirar entre qu\u00e9 caracteres est\u00e1n: si unen emojis o ligan una",
             "escritura que lo requiere, no hay nada que hacer; si separan",
             "palabras latinas, hay que eliminarlas."
+          )
+        } else if (sin_accion) {
+          paste(
+            "Revisar esas celdas y corregirlas en la fuente o a mano: quitar el",
+            "control desde el plan dejar\u00eda un texto que la reparaci\u00f3n de",
+            "la codificaci\u00f3n reescribe."
           )
         } else if (hay(eliminables) && !hay(espacios) && !hay(significativos)) {
           paste0(
@@ -5472,9 +5750,9 @@
     # solo tiene sentido sobre una magnitud. Las unidades y las monedas mezcladas
     # salen de la misma lectura de la columna como cantidad, y se omiten con ella.
     # Se declara en `cobertura_diagnosticos`, solo si alguno habria salido.
-    lectura_numerica <- (isTRUE(fila$n_numeros_texto > 0L) &&
-      is.finite(fila$proporcion_numeros_texto) &&
-      fila$proporcion_numeros_texto >= 0.8) ||
+    lectura_numerica <- .fila_con_numeros_como_texto(
+      fila, resultado$numeros_texto
+    ) ||
       length(resultado$numeros_texto$unidades) > 1L ||
       length(resultado$numeros_texto$monedas) > 1L
     if (codigo_declarado && lectura_numerica) {
@@ -5492,9 +5770,8 @@
         )
       )
     }
-    if (!codigo_declarado && isTRUE(fila$n_numeros_texto > 0L) &&
-        is.finite(fila$proporcion_numeros_texto) &&
-        fila$proporcion_numeros_texto >= 0.8) {
+    if (!codigo_declarado &&
+        .fila_con_numeros_como_texto(fila, resultado$numeros_texto)) {
       agregar(.nuevo_hallazgo(
         nombre, "numero_como_texto", "sospechoso",
         if (isTRUE(fila$numero_texto_ambiguo)) {
@@ -5927,9 +6204,14 @@
         en_rango <- valores$anio >= 1800L & valores$anio <= 2100L &
           valores$mes >= 1L & valores$mes <= 12L &
           valores$dia >= 1L & valores$dia <= 31L
+        # Con el formato dicho. Sin el, `as.Date()` lo adivina por el PRIMER
+        # elemento y, si ese no es una fecha, aborta: un mes `0` -el codigo
+        # habitual de "mes desconocido"-, un 30 de febrero o un `NA` en la
+        # primera fila (`sprintf()` lo escribe `  NA`) tiraban `perfilar()`
+        # entero. Es la forma de `R/fechas.R`: lo que no es fecha queda `NA`.
         fechas <- suppressWarnings(as.Date(sprintf(
           "%04d-%02d-%02d", valores$anio, valores$mes, valores$dia
-        )))
+        ), format = "%Y-%m-%d"))
         proporcion <- mean(en_rango[presentes] & !is.na(fechas[presentes]))
         if (is.finite(proporcion) && proporcion >= 0.8) {
           hallados <- c(hallados, paste0(
@@ -6023,6 +6305,7 @@
                                  n_filas_en_grupos_duplicados,
                                  relaciones_orden = list(),
                                  relaciones_aritmeticas = list(),
+                                 relaciones_funcionales = list(),
                                  normalizacion = NULL,
                                  detectar_casi_duplicados = TRUE,
                                  max_proporcion_grupo = 0.5,
@@ -6102,7 +6385,17 @@
       length(clave_declarada) &&
       !anyNA(.indice_nombre(clave_declarada, names(datos))) &&
       nrow(datos)) {
-    clave_texto <- .marcar_utf8_textos(clave_declarada)
+    # El nombre entra a una FRASE, no a un campo que se cruce con los datos
+    # -para eso estan `columna` y la traza, que lo guardan byte por byte-. Un
+    # nombre sin marca que no es UTF-8 -`fread()` sobre un CSV latin-1- se pegaba
+    # crudo junto al texto del paquete, que va marcado UTF-8, y `paste0()` marcaba
+    # la frase entera: la `descripcion` decia ser UTF-8 con un byte `a0` suelto
+    # adentro. Se rinde como lo muestra la consola, `ciudad\xa0`, igual que los
+    # niveles de `clasificar_variables()`, y lo declarado `bytes` a su forma
+    # imprimible; lo que ya es UTF-8 valido queda igual.
+    clave_texto <- .marcar_utf8_textos(
+      .publicar_sin_marca_ilegible(.texto_publicable(clave_declarada))
+    )
     valores_clave <- .seleccionar_columnas(datos, clave_declarada)
     filas_con_ausentes <- .filas_clave_con_ausentes(valores_clave)
     nombre_clave <- if (length(clave_declarada) == 1L) {
@@ -6346,6 +6639,9 @@
   }
   if (length(relaciones_aritmeticas)) {
     hallazgos <- c(hallazgos, relaciones_aritmeticas)
+  }
+  if (length(relaciones_funcionales)) {
+    hallazgos <- c(hallazgos, relaciones_funcionales)
   }
 
   if (length(hallazgos)) {

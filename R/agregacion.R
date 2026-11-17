@@ -553,6 +553,8 @@ transiciones_granularidad <- function() {
     #                            las tablas que si se midieron.
     #   muestra_no_disponible -> NO. Fallo la consulta de muestra y el resumen SQL
     #                            sobrevivio: la tabla puede aportar igual.
+    #   permisos_columnas     -> NO. Se perfilo; el catalogo no dijo que columnas
+    #                            no se leen o llegan enmascaradas.
     explican_la_tabla <- c("tabla", "tabla_vacia", "medicion_incompleta")
     con_motivo <- if (is.null(faltantes$alcance)) {
       faltantes
@@ -1008,7 +1010,7 @@ transiciones_granularidad <- function() {
   resultado
 }
 
-.advertencia_agregacion <- function(medidas, destino, funcion) {
+.advertencia_agregacion <- function(destino, funcion) {
   if (destino != "conjuntoEntidades" || funcion != "promedio") {
     return(NA_character_)
   }
@@ -1637,9 +1639,7 @@ agregar <- function(medidas, destino,
       objeto_medible = .objeto_agregado(medidas, indices, destino),
       resultado = valor,
       agregacion = funcion,
-      advertencia_agregacion = .advertencia_agregacion(
-        medidas, destino, funcion
-      ),
+      advertencia_agregacion = .advertencia_agregacion(destino, funcion),
       stringsAsFactors = FALSE
     )
   })

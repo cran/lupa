@@ -211,10 +211,20 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
   ),
   sentinelas_numericos = list(clase = "politica", fila = "configuracion_sentinelas_numericos"),
   cadenas_ausencia = list(clase = "politica", fila = "configuracion_cadenas_ausencia"),
-  analizar_dependencias = list(clase = "sin_hallazgo"),
-  umbral_dependencia = list(clase = "sin_hallazgo"),
-  umbral_casi_clave_dependencia = list(clase = "sin_hallazgo"),
-  max_columnas_dependencias = list(clase = "sin_hallazgo"),
+  # Desde que una dependencia casi exacta es el hallazgo
+  # `relacion_funcional_columnas`, apagar la busqueda o mover sus umbrales
+  # cambia los hallazgos: apagada, una dependencia rota salia `resuelto, ok`
+  # con los mismos datos. Los topes de trabajo acotan y lo declaran en
+  # `cobertura_diagnosticos` (`dependencias_funcionales`).
+  analizar_dependencias = list(
+    clase = "habilita", meta = "analizar_dependencias", forma = "interruptor",
+    hallazgos = "relacion_funcional_columnas"
+  ),
+  umbral_dependencia = list(clase = "vara", meta = "umbral_dependencia"),
+  umbral_casi_clave_dependencia = list(
+    clase = "vara", meta = "umbral_casi_clave_dependencia"
+  ),
+  max_columnas_dependencias = list(clase = "limite"),
   datos_personales_permitidos = list(clase = "vara", meta = "datos_personales_permitidos"),
   proteger_datos_personales = list(clase = "politica", fila = "configuracion_proteccion"),
   columnas_personales = list(
@@ -264,9 +274,9 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
   max_asimetria_equifrecuente_vocabulario = list(
     clase = "vara", meta = "max_asimetria_equifrecuente_vocabulario"
   ),
-  max_comparaciones_dependencias = list(clase = "sin_hallazgo"),
+  max_comparaciones_dependencias = list(clase = "limite"),
   max_trabajo_vocabulario = list(clase = "limite"),
-  max_trabajo_dependencias = list(clase = "sin_hallazgo"),
+  max_trabajo_dependencias = list(clase = "limite"),
   max_largo_valor_vocabulario = list(clase = "limite"),
   max_celdas_muestra = list(clase = "limite"),
   max_bytes_muestra = list(clase = "limite"),
@@ -382,6 +392,17 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
   valores <- valores[!is.na(valores)]
   valores <- valores[!duplicated(.clave_bytes(valores))]
   .clave_bytes(.ordenar_por_bytes(valores))
+}
+
+# Una lista de la configuracion como la publican las filas `configuracion_*`:
+# sus elementos separados por `; `, y "ninguna" si esta vacia. Una lista vacia
+# es una politica declarada -`sentinelas_numericos = numeric(0)` apaga los
+# centinelas-, y los centinelas la publicaban como texto vacio: la fila decia
+# `modificado` sin decir a que. Las cuatro politicas que son listas la escriben
+# con esta funcion.
+.texto_lista_configuracion_deriva <- function(x) {
+  if (!length(x)) return("ninguna")
+  paste(unlist(x), collapse = "; ")
 }
 
 .configuracion_sentinelas_perfil <- function(perfil) {
@@ -729,7 +750,12 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
       !es_texto(columnas_b$tipo_declarado[match(comunes, nombres_b)])
   ]
   if (!length(dejaron)) return(character())
-  as.vector(outer(dejaron, .diagnosticos_relacion_textual, paste))
+  # La clave sale de `.clave_declinacion_deriva()`, con el nombre como lo trae
+  # el perfil: la normalizacion no se aplica dos veces.
+  originales <- as.character(columnas_a$columna[match(dejaron, nombres_a)])
+  as.vector(outer(
+    originales, .diagnosticos_relacion_textual, .clave_declinacion_deriva
+  ))
 }
 
 # Las claves `columna tipo` que el perfil nuevo no evaluo porque se retiro o se
@@ -742,7 +768,7 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
   hallazgos_a <- anterior$hallazgos
   columnas_hallazgo <- if (inherits(hallazgos_a, "data.frame") &&
                            all(c("columna", "tipo_hallazgo") %in% names(hallazgos_a))) {
-    ifelse(is.na(hallazgos_a$columna), "<tabla>", as.character(hallazgos_a$columna))
+    as.character(hallazgos_a$columna)
   } else character()
   tipos_hallazgo <- if (length(columnas_hallazgo)) {
     as.character(hallazgos_a$tipo_hallazgo)
@@ -786,7 +812,7 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
           .nombres_para_operar(as.character(valor_b))
         )))
         if (length(declarada_a) > 0L && !identical(declarada_a, declarada_b)) {
-          "<tabla>"
+          NA_character_
         } else character()
       },
       interruptor = if (isTRUE(as.logical(valor_a)[1L]) &&
@@ -811,8 +837,33 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
   declinados
 }
 
+# La clave `columna tipo` con que se decide si un hallazgo se declino. Un
+# hallazgo de la tabla -`columna` NA- no es de ninguna columna y su clave no
+# puede ser la de una, se llame como se llame: la de una columna lleva `C`
+# delante y la de la tabla es `T`, la regla de `columna_llave` en
+# `.resumir_hallazgos_deriva()`. Antes cada sitio escribia la tabla como la
+# cadena `"<tabla>"`, y la cobertura de un diagnostico de la tabla -la busqueda
+# de fechas partidas recortada, con `columna = NA`- daba `"NA ..."`: no casaba,
+# y el hallazgo que el perfil nuevo no volvio a buscar salia `resuelto` con
+# severidad `ok`.
 .clave_declinacion_deriva <- function(columna, tipo) {
-  paste(.nombres_para_operar(columna), as.character(tipo))
+  columna <- .nombres_para_operar(columna)
+  paste(
+    ifelse(is.na(columna), "T", paste0("C", columna)), as.character(tipo)
+  )
+}
+
+# Si el perfil nuevo declino el diagnostico de un hallazgo que desaparecio: lo
+# declina su clave, la de alguna de las columnas que nombra -`componentes`, las
+# de un hallazgo de varias- o la de la tabla. Una fila de cobertura sin columna
+# no dice que el diagnostico se salteo en una parte: dice que no se evaluo en
+# ninguna, y entonces tampoco en cada columna. Leida como "la tabla" y nada mas,
+# un grupo de columnas iguales contra una entrega sin filas -cuya cobertura
+# declina `columnas_duplicadas` con `columna = NA`, porque dos columnas vacias
+# coinciden sin que eso sea evidencia- salia `resuelto` con severidad `ok`.
+.hallazgo_declinado_deriva <- function(columna, componentes, tipo, declinados) {
+  columnas <- c(as.character(columna), as.character(componentes), NA_character_)
+  any(.clave_declinacion_deriva(columnas, tipo) %in% declinados)
 }
 
 # Si un hallazgo que desaparecio nombra una columna que el perfil nuevo ya no
@@ -965,6 +1016,9 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
   # chequeos que se omitieron, no un hallazgo propio.
   texto_largo_no_evaluado = character(),
   relacion_orden_columnas = "relacion_orden_columnas",
+  # La busqueda de dependencias recortada -por columnas, por presupuesto o por
+  # la muestra- deja sin evaluar sus hallazgos sobre las columnas que nombra.
+  dependencias_funcionales = "relacion_funcional_columnas",
   proximidad_vocabulario = c(
     "casi_duplicados_vocabulario", "variantes_equifrecuentes_vocabulario"
   ),
@@ -996,7 +1050,6 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
       hallazgos <- hallazgos_retirados %||% perfil$hallazgos
       if (is.data.frame(hallazgos) && nrow(hallazgos)) {
         columnas_h <- as.character(hallazgos$columna)
-        columnas_h[is.na(columnas_h)] <- "<tabla>"
         return(.clave_declinacion_deriva(
           columnas_h, as.character(hallazgos$tipo_hallazgo)
         ))
@@ -1036,8 +1089,7 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
 .hallazgo_cuenta_filas_tabla <- function(fila) {
   if (!all(c("columna", "unidad_conteo") %in% names(fila))) return(FALSE)
   unidad <- as.character(fila$unidad_conteo[[1L]])
-  tabla <- is.na(fila$columna[[1L]]) ||
-    identical(as.character(fila$columna[[1L]]), "<tabla>")
+  tabla <- is.na(fila$columna[[1L]])
   isTRUE(identical(unidad, "fila")) && isTRUE(tabla)
 }
 
@@ -1051,12 +1103,17 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
       stringsAsFactors = FALSE
     ))
   }
-  columna <- ifelse(is.na(x$columna), "<tabla>", as.character(x$columna))
+  columna <- as.character(x$columna)
   # Un hallazgo `columnas_duplicadas` se identifica por TODAS sus columnas, sin
   # importar el orden: la primera del grupo cambia si se reordenan las columnas
   # y el grupo sigue siendo el mismo. Los grupos se leen una vez; buscarlos por
   # hallazgo recorria todos los hallazgos en cada uno.
+  # Un hallazgo de la tabla no tiene columna, y su clave tampoco: la usa solo la
+  # guarda de columnas retiradas, que no mira los de la tabla.
   columna_clave <- columna
+  columna_llave <- vapply(seq_along(columna), function(i) {
+    if (is.na(columna[[i]])) "T" else paste0("C", .clave_bytes(columna[[i]]))
+  }, character(1L))
   miembros_duplicadas <- list()
   duplicadas <- which(as.character(x$tipo_hallazgo) == "columnas_duplicadas")
   con_grupo_duplicadas <- logical(length(duplicadas))
@@ -1077,6 +1134,9 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
     con_grupo_duplicadas <- con_grupo
     miembros_duplicadas[con_grupo] <- grupos$grupos[grupo_fila[con_grupo]]
     columna_clave[duplicadas[con_grupo]] <- claves_grupo[grupo_fila[con_grupo]]
+    columna_llave[duplicadas[con_grupo]] <- paste0(
+      "G", .clave_bytes(claves_grupo[grupo_fila[con_grupo]])
+    )
     for (j in which(!con_grupo)) {
       i <- duplicadas[[j]]
       miembros_duplicadas[[j]] <- .miembros_columna_duplicada_deriva(
@@ -1085,11 +1145,12 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
       columna_clave[[i]] <- .clave_columna_duplicada_deriva(
         miembros_duplicadas[[j]]
       )
+      columna_llave[[i]] <- paste0("G", .clave_bytes(columna_clave[[i]]))
     }
   }
   clave_de <- function(filas) {
     .clave_bytes(paste(
-      .clave_bytes(columna_clave[filas]), .clave_bytes(x$tipo_hallazgo[filas]),
+      .clave_bytes(columna_llave[filas]), .clave_bytes(x$tipo_hallazgo[filas]),
       sep = "\034"
     ))
   }
@@ -1484,11 +1545,15 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
 #' diagnóstico volvió a evaluarse. Si el perfil nuevo lo declinó —y lo dice en
 #' su `cobertura_diagnosticos`—, el cambio se informa como `no_evaluado` con
 #' severidad `sospechoso`, porque no se sabe si el hallazgo sigue: dejar de
-#' mirar no es lo mismo que arreglar. Lo mismo si el perfil nuevo apagó el
+#' mirar no es lo mismo que arreglar. Una fila de esa cobertura sin columna
+#' declina el diagnóstico en toda la tabla, también en cada columna: un grupo de
+#' columnas iguales comparado con una entrega sin filas sale `no_evaluado`, no
+#' `resuelto`. Lo mismo si el perfil nuevo apagó el
 #' diagnóstico con su argumento o retiró la declaración que lo habilita, cosa
 #' que se lee en `meta`: `casi_duplicados_vocabulario = FALSE`,
 #' `ausencia_estructural = FALSE`, `variantes_equifrecuentes_vocabulario =
-#' FALSE`, una `clave` retirada o declarada sobre otras columnas, una columna
+#' FALSE`, `analizar_dependencias = FALSE`, una `clave` retirada o declarada
+#' sobre otras columnas, una columna
 #' retirada de `columnas_sin_ceros`, `columnas_no_negativas`,
 #' `columnas_personales` o `aplicabilidad`, y `duplicados_aproximados` apagado o
 #' corrido sobre otras columnas —lo que corrió queda en
@@ -1516,12 +1581,18 @@ rbind.deriva_perfil <- function(..., deparse.level = 1) {
 #' [perfilar()] tiene su lugar en la comparación:
 #' habilita un diagnóstico, es una vara —su cambio se declara en la fila
 #' `configuracion_umbrales`, que incluye los umbrales de las
-#' relaciones de orden y aritméticas entre columnas, los del vocabulario y
+#' relaciones de orden y aritméticas entre columnas y de las dependencias
+#' funcionales, los del vocabulario y
 #' `datos_personales_permitidos`, `validadores_personales`,
 #' `umbral_documento_verificado` y `muestra_validadores`—, tiene su propia fila
 #' de configuración, acota el trabajo y lo declara en `cobertura_diagnosticos`,
 #' o no cambia los hallazgos. Una vara que uno de los dos perfiles no registra
 #' —un perfil de una versión anterior— no se compara.
+#' La comparación no sabe de versiones: un perfil guardado por una versión que
+#' todavía no emitía un tipo de hallazgo no lo trae, y comparado con uno nuevo
+#' de los mismos datos ese hallazgo sale `aparecido`. Pasa con
+#' `relacion_funcional_columnas` frente a un perfil anterior a ese hallazgo: una
+#' fila `aparecido` por cada dependencia casi exacta, en cada sentido.
 #'
 #' Los hallazgos que cuentan filas de la tabla y no pertenecen a una columna
 #' concreta tampoco se declaran resueltos si aparecieron o desaparecieron
@@ -2067,6 +2138,8 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
   sentinelas_comparables <- !is.null(sentinelas_a) &&
     !is.null(sentinelas_b) &&
     isTRUE(all.equal(sentinelas_a, sentinelas_b, check.attributes = FALSE))
+  sentinelas_registrados <- !is.null(sentinelas_a) &&
+    !is.null(sentinelas_b)
   # Dos listas enmascaradas del mismo modo comparan iguales y no hay nada que
   # declarar: la guarda es para cuando DIFIEREN y esa diferencia se explica por
   # el enmascarado, no por la politica.
@@ -2075,7 +2148,7 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
   texto_configuracion <- function(x) {
     if (is.null(x)) return(NA_character_)
     if (oculta(x)) return("[pol\u00edtica protegida]")
-    paste(unlist(x), collapse = "; ")
+    .texto_lista_configuracion_deriva(x)
   }
   if (sentinelas_ocultos) {
     agregar(
@@ -2092,7 +2165,7 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
         "correr las dos con la misma configuraci\u00f3n de protecci\u00f3n."
       )
     )
-  } else if (!sentinelas_comparables) {
+  } else if (sentinelas_registrados && !sentinelas_comparables) {
     agregar(
       NA_character_, "configuracion_sentinelas_numericos", "modificado",
       "error", texto_configuracion(sentinelas_a),
@@ -2128,8 +2201,8 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
       NA_character_, "configuracion_cadenas_ausencia",
       if (ocultas) "no_comparable" else "modificado",
       if (ocultas) "sospechoso" else "error",
-      if (length(cadenas_a)) paste(cadenas_a, collapse = "; ") else "ninguna",
-      if (length(cadenas_b)) paste(cadenas_b, collapse = "; ") else "ninguna",
+      .texto_lista_configuracion_deriva(cadenas_a),
+      .texto_lista_configuracion_deriva(cadenas_b),
       descripcion = paste(
         "Cambi\u00f3 la lista de cadenas que se declaran como ausencia; se",
         "mantienen las comparaciones, pero las diferencias de faltantes y de",
@@ -2293,13 +2366,10 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
   aplicabilidad_b <- .configuracion_aplicabilidad_perfil(actual)
   if (!is.null(aplicabilidad_a) && !is.null(aplicabilidad_b) &&
       !identical(aplicabilidad_a, aplicabilidad_b)) {
-    texto_aplicabilidad <- function(x) {
-      if (!length(x)) "ninguna" else paste(x, collapse = "; ")
-    }
     agregar(
       NA_character_, "configuracion_aplicabilidad", "modificado",
-      "error", texto_aplicabilidad(aplicabilidad_a),
-      texto_aplicabilidad(aplicabilidad_b),
+      "error", .texto_lista_configuracion_deriva(aplicabilidad_a),
+      .texto_lista_configuracion_deriva(aplicabilidad_b),
       descripcion = paste(
         "Cambiaron las columnas con regla de aplicabilidad; esa regla redefine",
         "el universo aplicable, as\u00ed que las diferencias de faltantes,",
@@ -2317,13 +2387,10 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
   opcionales_b <- .configuracion_opcionales_perfil(actual)
   if (!is.null(opcionales_a) && !is.null(opcionales_b) &&
       !identical(opcionales_a, opcionales_b)) {
-    texto_opcionales <- function(x) {
-      if (!length(x)) "ninguna" else paste(x, collapse = "; ")
-    }
     agregar(
       NA_character_, "configuracion_columnas_opcionales", "modificado",
-      "error", texto_opcionales(opcionales_a),
-      texto_opcionales(opcionales_b),
+      "error", .texto_lista_configuracion_deriva(opcionales_a),
+      .texto_lista_configuracion_deriva(opcionales_b),
       descripcion = paste(
         "Cambiaron las columnas declaradas en `columnas_opcionales`; su",
         "universo de completitud son las celdas presentes, as\u00ed que las",
@@ -2361,12 +2428,14 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
         exigir_todas = TRUE
       )
     }
-    clave_habilitada <- .clave_declinacion_deriva(x$columna, x$tipo_hallazgo)
+    clave_habilitada <- .clave_declinacion_deriva(
+      x$columna, x$tipo_hallazgo
+    )
     argumento_nuevo <- if (clave_habilitada %in% habilitados_ahora) {
       names(habilitados_ahora)[match(clave_habilitada, habilitados_ahora)]
     } else NA_character_
     agregar(
-      if (x$columna == "<tabla>") NA_character_ else x$columna,
+      x$columna,
       "hallazgo", "aparecido", x$severidad, NA_character_, x$tipo_hallazgo,
       descripcion = if (length(unidas_por_tipo)) {
         paste0(
@@ -2437,7 +2506,7 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
       separadas_por_tipo <- .duplicadas_separadas_por_tipo(
         miembros_viejos, nombres_actuales, anterior, actual, hallazgos_b
       )
-    } else if (x$columna != "<tabla>" &&
+    } else if (!is.na(x$columna) &&
         !.nombres_para_operar(x$columna) %in% nombres_actuales &&
         .hallazgo_nombra_columna_retirada(
           columna_hallazgo, columnas_retiradas, columnas_hallazgo
@@ -2466,7 +2535,7 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
     # cobertura del perfil nuevo declina su diagnostico sobre alguna de ellas:
     # las relaciones entre columnas declaran las que omitieron como una lista
     # (`a,b,c`), y la guarda las parte en `.diagnosticos_declinados_deriva()`.
-    componentes <- if (!identical(x$columna, "<tabla>")) {
+    componentes <- if (!is.na(x$columna)) {
       if (is.list(x$trazabilidad[[1L]]) &&
           length(x$trazabilidad[[1L]]$columnas)) {
         as.character(x$trazabilidad[[1L]]$columnas)
@@ -2474,10 +2543,9 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
         .separar_nombres_columnas_historico(x$columna, sep = ",")
       }
     } else character()
-    declinado <- clave_declinacion %in% declinados_ahora ||
-      any(.clave_declinacion_deriva(
-        componentes, rep(x$tipo_hallazgo, length(componentes))
-      ) %in% declinados_ahora)
+    declinado <- .hallazgo_declinado_deriva(
+      x$columna, componentes, x$tipo_hallazgo, declinados_ahora
+    )
     # Los dos motivos de no evaluacion mandan a lugares distintos, y decir el
     # equivocado es peor que no decir ninguno: quien busque en
     # `cobertura_diagnosticos` un diagnostico que nunca se pidio no va a
@@ -2491,7 +2559,7 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
       .declinados_por_cambio_de_tipo(anterior, actual)
     declinado <- declinado || length(separadas_por_tipo) > 0L
     agregar(
-      if (x$columna == "<tabla>") NA_character_ else x$columna,
+      x$columna,
       "hallazgo",
       if (declinado) "no_evaluado" else "resuelto",
       if (declinado) "sospechoso" else "ok",
@@ -2538,7 +2606,7 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
     if (sa != sb) {
       columna <- hallazgos_b$columna[[indice_b]]
       agregar(
-        if (columna == "<tabla>") NA_character_ else columna,
+      columna,
         "severidad_hallazgo",
         if (match(sb, c("ok", "sospechoso", "error")) >
             match(sa, c("ok", "sospechoso", "error"))) "agravado" else "atenuado",
@@ -2836,6 +2904,44 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
   columnas[[campo]][[indice]]
 }
 
+# La moda y el centinela pueden llegar como texto aunque la columna de origen
+# sea numerica: el perfil conserva esos valores en una forma publicable. Para
+# comparar hay que volver a leer solo los tipos numericos conocidos; una cadena
+# de una columna de texto sigue siendo un valor de texto y no debe interpretarse
+# como numero por accidente.
+.valor_comparable_equivalencia <- function(columnas, campo, indice) {
+  valor <- .valor_equivalencia(columnas, campo, indice)
+  if (!campo %in% c("moda", "centinela_valor") ||
+      !is.character(valor) || length(valor) != 1L || is.na(valor)) {
+    return(valor)
+  }
+  tipo <- .tipo_declarado_equivalencia(columnas, indice)
+  if (is.na(tipo) || !tipo %in% c("doble", "entero", "integer64")) {
+    return(valor)
+  }
+  texto <- trimws(valor)
+  if (!nzchar(texto) ||
+      (grepl(",", texto, fixed = TRUE, useBytes = TRUE) &&
+       grepl(".", texto, fixed = TRUE, useBytes = TRUE))) {
+    return(valor)
+  }
+  if (identical(tipo, "integer64")) {
+    if (!grepl("^[+-]?[0-9]+$", texto, perl = TRUE, useBytes = TRUE)) {
+      return(valor)
+    }
+    negativo <- startsWith(texto, "-")
+    digitos <- sub(
+      "^0+(?=[0-9])", "", sub("^[+-]", "", texto), perl = TRUE
+    )
+    return(if (negativo && !identical(digitos, "0")) {
+      paste0("-", digitos)
+    } else digitos)
+  }
+  texto <- gsub(",", ".", texto, fixed = TRUE)
+  numero <- suppressWarnings(as.numeric(texto))
+  if (is.na(numero) && !is.na(valor)) valor else numero
+}
+
 .igualdad_equivalencia <- function(a, b) {
   resultado <- tryCatch(a == b, error = function(e) FALSE)
   isTRUE(resultado)
@@ -2976,6 +3082,9 @@ comparar_perfiles <- function(anterior, actual, umbral_cambio = 0.05,
 #' selección se comparan en el eje `exacto`; las fechas canónicas en `fecha` y
 #' `moda` y `centinela_valor` en `valor`. Los ejes `exacto`, `fecha` y `valor`
 #' son binarios por construcción.
+#' En una columna numérica, `moda` y `centinela_valor` se comparan por el número
+#' y no por cómo lo escribió cada sesión: la marca decimal de `options(OutDec)`
+#' y la notación de `scipen` no cuentan como una diferencia.
 #'
 #' El comparador devuelve datos, no decisiones: no alimenta hallazgos,
 #' severidades ni puntajes. La tolerancia es del llamador y jamás entra en una
@@ -3252,8 +3361,14 @@ comparar_equivalencia <- function(anterior, actual, tolerancia) {
         )
         next
       }
+      a_comparable <- .valor_comparable_equivalencia(
+        anterior, campo, indice_a
+      )
+      b_comparable <- .valor_comparable_equivalencia(
+        actual, campo, indice_b
+      )
       comparacion <- .comparar_valor_equivalencia(
-        a, b, tipo_eje[[1L]], tolerancia
+        a_comparable, b_comparable, tipo_eje[[1L]], tolerancia
       )
       k <- k + 1L
       salida[[k]] <- list(
